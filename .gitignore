@@ -1,0 +1,8 @@
+backend/data/*.sqlite
+backend/data/*.sqlite-*
+backend/__pycache__/
+frontend/dist
+frontend/node_modules
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
