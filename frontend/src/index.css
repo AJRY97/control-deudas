@@ -8,12 +8,15 @@
   }
 
   html {
-    background: #f6f8fb;
+    background: #070b13;
+    color-scheme: dark;
   }
 
   body {
     min-width: 320px;
     margin: 0;
+    background: #070b13;
+    color: #e5edf6;
     font-family:
       Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     letter-spacing: 0;
@@ -28,6 +31,145 @@
 
 @layer components {
   .input {
-    @apply h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-2 focus:ring-teal-100;
+    @apply h-10 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20;
   }
+}
+
+.theme-dark {
+  background:
+    linear-gradient(180deg, rgba(20, 184, 166, 0.05), rgba(7, 11, 19, 0) 18rem),
+    #070b13;
+}
+
+.theme-dark .shadow-soft {
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.34);
+}
+
+.theme-dark .bg-white,
+.theme-dark .bg-slate-50 {
+  background-color: #111827 !important;
+}
+
+.theme-dark .bg-slate-100 {
+  background-color: #1f2937 !important;
+}
+
+.theme-dark .bg-slate-950 {
+  background-color: #0f766e !important;
+}
+
+.theme-dark .bg-teal-50 {
+  background-color: rgba(20, 184, 166, 0.14) !important;
+}
+
+.theme-dark .bg-amber-50 {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+}
+
+.theme-dark .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.14) !important;
+}
+
+.theme-dark .bg-indigo-50 {
+  background-color: rgba(129, 140, 248, 0.14) !important;
+}
+
+.theme-dark .border-slate-200,
+.theme-dark .border-slate-300,
+.theme-dark .border-slate-400,
+.theme-dark .border-slate-500 {
+  border-color: #263244 !important;
+}
+
+.theme-dark .border-teal-200 {
+  border-color: rgba(45, 212, 191, 0.32) !important;
+}
+
+.theme-dark .border-amber-200 {
+  border-color: rgba(251, 191, 36, 0.34) !important;
+}
+
+.theme-dark .border-rose-200 {
+  border-color: rgba(251, 113, 133, 0.35) !important;
+}
+
+.theme-dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #202b3a !important;
+}
+
+.theme-dark .text-slate-950,
+.theme-dark .text-slate-900,
+.theme-dark .text-slate-800 {
+  color: #f8fafc !important;
+}
+
+.theme-dark .text-slate-700 {
+  color: #cbd5e1 !important;
+}
+
+.theme-dark .text-slate-600,
+.theme-dark .text-slate-500 {
+  color: #93a4b8 !important;
+}
+
+.theme-dark .text-teal-700,
+.theme-dark .text-teal-900,
+.theme-dark .text-teal-950 {
+  color: #5eead4 !important;
+}
+
+.theme-dark .text-amber-700,
+.theme-dark .text-amber-900,
+.theme-dark .text-amber-950 {
+  color: #fcd34d !important;
+}
+
+.theme-dark .text-rose-700,
+.theme-dark .text-rose-800 {
+  color: #fda4af !important;
+}
+
+.theme-dark .text-indigo-700 {
+  color: #c4b5fd !important;
+}
+
+.theme-dark input,
+.theme-dark select,
+.theme-dark textarea {
+  background-color: #0b1220 !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+
+.theme-dark input::placeholder,
+.theme-dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+.theme-dark option {
+  background-color: #0b1220;
+  color: #f8fafc;
+}
+
+.theme-dark .hover\:bg-slate-50:hover,
+.theme-dark .hover\:bg-rose-50:hover {
+  background-color: #1b2534 !important;
+}
+
+.theme-dark .hover\:bg-slate-800:hover,
+.theme-dark .hover\:bg-teal-800:hover {
+  background-color: #0d9488 !important;
+}
+
+.theme-dark .hover\:border-slate-400:hover,
+.theme-dark .hover\:border-slate-500:hover {
+  border-color: #475569 !important;
+}
+
+.theme-dark .focus\:border-teal-500:focus {
+  border-color: #2dd4bf !important;
+}
+
+.theme-dark .focus\:ring-teal-100:focus {
+  --tw-ring-color: rgba(45, 212, 191, 0.22) !important;
 }

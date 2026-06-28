@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("DEBT_APP_DB", ROOT / "data" / "debts.sqlite"))
 SEED_PATH = ROOT / "seed_debts.json"
+MONTHLY_DETAILS_PATH = ROOT / "monthly_details.json"
 STATIC_DIR = Path(os.environ.get("DEBT_APP_STATIC", ROOT.parent / "frontend" / "dist"))
 PAYER_MODES = {"alan", "mairon", "ambos", "personalizado"}
 
@@ -199,9 +200,16 @@ def build_summary(from_month: str, months: int) -> dict:
     rows = fetch_debts()
     debts = [computed_debt(row, from_month) for row in rows]
     projection = []
+    detail_data = load_monthly_details()
+    statements_by_month = {statement.get("month"): statement for statement in detail_data.get("statements", [])}
+    detail_items_by_month = {
+        month_key: [item for item in detail_data.get("items", []) if item.get("month") == month_key and item.get("is_current")]
+        for month_key in statements_by_month
+    }
 
     for offset in range(months):
         month = add_months(from_start, offset)
+        projection_month = month_key(month)
         alan = 0
         mairon = 0
         active_count = 0
@@ -212,9 +220,15 @@ def build_summary(from_month: str, months: int) -> dict:
                 alan += row["alan_monthly"]
                 mairon += row["mairon_monthly"]
                 active_count += 1
+        statement = statements_by_month.get(projection_month)
+        if statement:
+            people = {person.get("person"): person for person in statement.get("people", [])}
+            alan = people.get("ALAN", {}).get("settlement_charges", alan)
+            mairon = people.get("MAIRON", {}).get("settlement_charges", mairon)
+            active_count = len(detail_items_by_month.get(projection_month, [])) or active_count
         projection.append(
             {
-                "month": month_key(month),
+                "month": projection_month,
                 "alan": alan,
                 "mairon": mairon,
                 "total": alan + mairon,
@@ -246,6 +260,31 @@ def build_summary(from_month: str, months: int) -> dict:
             "alan_end_month": month_key(alan_end) if alan_end else None,
             "mairon_end_month": month_key(mairon_end) if mairon_end else None,
             "peak_month": peak,
+        },
+    }
+
+
+def load_monthly_details() -> dict:
+    if not MONTHLY_DETAILS_PATH.exists():
+        return {"statements": [], "items": []}
+    return json.loads(MONTHLY_DETAILS_PATH.read_text(encoding="utf-8"))
+
+
+def month_detail(month: str) -> dict:
+    month_start(month)
+    data = load_monthly_details()
+    statement = next((item for item in data.get("statements", []) if item.get("month") == month), None)
+    items = [item for item in data.get("items", []) if item.get("month") == month]
+    current_total = sum(item.get("person_amount", 0) for item in items if item.get("is_current"))
+    future_total = sum(item.get("person_amount", 0) for item in items if item.get("is_future"))
+    return {
+        "month": month,
+        "statement": statement,
+        "items": items,
+        "totals": {
+            "current": current_total,
+            "future": future_total,
+            "all": current_total + future_total,
         },
     }
 
@@ -340,6 +379,14 @@ class DebtHandler(BaseHTTPRequestHandler):
             months = int(query.get("months", ["24"])[0])
             try:
                 self.send_json(build_summary(from_month, months))
+            except ValueError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        if parsed.path == "/api/month-detail":
+            query = parse_qs(parsed.query)
+            month = query.get("month", [current_month_key()])[0]
+            try:
+                self.send_json(month_detail(month))
             except ValueError as exc:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return

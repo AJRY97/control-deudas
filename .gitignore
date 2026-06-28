@@ -1,5 +1,6 @@
 backend/data/*.sqlite
 backend/data/*.sqlite-*
+backend/monthly_details.json
 backend/__pycache__/
 frontend/dist
 frontend/node_modules

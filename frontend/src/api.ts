@@ -1,4 +1,4 @@
-import type { Debt, DebtPayload, SummaryResponse } from "./types";
+import type { Debt, DebtPayload, MonthlyDetailResponse, SummaryResponse } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -19,6 +19,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getSummary(fromMonth: string, months: number) {
   return request<SummaryResponse>(`/api/summary?from_month=${fromMonth}&months=${months}`);
+}
+
+export function getMonthDetail(month: string) {
+  return request<MonthlyDetailResponse>(`/api/month-detail?month=${month}`);
 }
 
 export function createDebt(payload: DebtPayload) {

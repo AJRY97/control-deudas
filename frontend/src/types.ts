@@ -56,3 +56,60 @@ export interface SummaryResponse {
   projection: ProjectionMonth[];
   stats: SummaryStats;
 }
+
+export interface StatementPerson {
+  person: "ALAN" | "MAIRON";
+  excel_current_charges: number;
+  excel_future_detected: number;
+  cartola_adjustment?: number;
+  settlement_charges: number;
+  credit_discount: number;
+  pay_now: number;
+}
+
+export interface MonthlyStatement {
+  month: string;
+  label: string;
+  source_excel: string;
+  source_pdf: string;
+  due_date: string;
+  statement_total_to_pay: number;
+  statement_minimum_to_pay: number;
+  current_charges_total: number;
+  previous_credit: number;
+  previous_period_billed: number;
+  previous_period_paid: number;
+  notes: string;
+  people: StatementPerson[];
+}
+
+export interface MonthlyDetailItem {
+  month: string;
+  person: "ALAN" | "MAIRON";
+  code: string;
+  concept: string;
+  total_amount: number;
+  statement_monthly: number;
+  first_installment_month: string;
+  person_amount: number;
+  payer_text: string;
+  installment: string;
+  end_text: string;
+  is_future: boolean;
+  is_current: boolean;
+  is_adjustment: boolean;
+  shared: boolean;
+  source_row: number | null;
+  note: string;
+}
+
+export interface MonthlyDetailResponse {
+  month: string;
+  statement: MonthlyStatement | null;
+  items: MonthlyDetailItem[];
+  totals: {
+    current: number;
+    future: number;
+    all: number;
+  };
+}
