@@ -484,22 +484,6 @@ export async function updateDebt(id: string, payload: DebtPayload) {
   return computedDebt(data as DebtRow, payload.start_month);
 }
 
-export async function markDebtPaid(id: string, paid: boolean) {
-  const { data, error } = await getSupabase()
-    .from("debts")
-    .update({
-      is_paid: paid,
-      paid_at: paid ? new Date().toISOString() : null,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", id)
-    .select("*")
-    .single();
-
-  if (error) throw new Error(error.message);
-  return computedDebt(data as DebtRow, monthKey(new Date()));
-}
-
 export async function deleteDebt(id: string) {
   const { error } = await getSupabase().from("debts").delete().eq("id", id);
   if (error) throw new Error(error.message);

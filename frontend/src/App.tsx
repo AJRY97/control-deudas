@@ -25,7 +25,6 @@ import {
   getMonthPayments,
   getNextPendingMonth,
   getSummary,
-  markDebtPaid,
   updateDebt,
   updateMonthPayment
 } from "./api";
@@ -76,6 +75,15 @@ function formatCurrency(value: number) {
 
 function numberFieldValue(value: number, emptyWhenZero = true) {
   return emptyWhenZero && value === 0 ? "" : String(value);
+}
+
+function moneyFieldValue(value: number) {
+  return value === 0 ? "" : formatCurrency(value);
+}
+
+function numericInputValue(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return digits ? Number(digits) : 0;
 }
 
 function formatMonth(value: string | null) {
@@ -343,12 +351,6 @@ export default function App() {
     await loadMonthPayments(debtMonth);
   }
 
-  async function toggleDebtPaid(debt: Debt) {
-    await markDebtPaid(debt.id, !debt.is_paid);
-    await load();
-    await loadMonthPayments(debtMonth);
-  }
-
   async function saveDebt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editor) return;
@@ -373,7 +375,8 @@ export default function App() {
 
   function updateDraftNumber(key: keyof DebtPayload, value: string) {
     if (!editor) return;
-    const numeric = Math.max(0, Number(value) || 0);
+    const rawNumeric = numericInputValue(value);
+    const numeric = key === "installments_total" ? Math.max(1, Math.min(24, rawNumeric || 1)) : Math.max(0, rawNumeric);
     let next = { ...editor.draft, [key]: numeric };
 
     if (key === "total_amount" || key === "installments_total") {
@@ -462,7 +465,6 @@ export default function App() {
         onTogglePayment={toggleMonthPayment}
         onEdit={openEdit}
         onDelete={(item) => void removeDebt(item)}
-        onToggleDebtPaid={(item) => void toggleDebtPaid(item)}
       />
 
       <div className="mx-auto hidden w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:flex lg:px-8">
@@ -661,7 +663,6 @@ export default function App() {
                 month={debtMonth}
                 onEdit={openEdit}
                 onDelete={(item) => void removeDebt(item)}
-                onTogglePaid={(item) => void toggleDebtPaid(item)}
               />
             )}
             {!hasStatementItems && showMaironList && (
@@ -673,7 +674,6 @@ export default function App() {
                 month={debtMonth}
                 onEdit={openEdit}
                 onDelete={(item) => void removeDebt(item)}
-                onTogglePaid={(item) => void toggleDebtPaid(item)}
               />
             )}
           </div>
@@ -702,7 +702,6 @@ export default function App() {
             onTogglePayment={(paid) => void toggleMonthPayment(desktopScope === "alan" ? "ALAN" : "MAIRON", paid)}
             onEdit={openEdit}
             onDelete={(item) => void removeDebt(item)}
-            onToggleDebtPaid={(item) => void toggleDebtPaid(item)}
           />
         )}
       </div>
@@ -758,25 +757,26 @@ export default function App() {
               </Field>
               <Field label="Total deuda">
                 <input
-                  type="number"
+                  type="text"
                   inputMode="numeric"
-                  min={0}
-                  placeholder="0"
-                  value={numberFieldValue(editor.draft.total_amount)}
+                  placeholder="$0"
+                  value={moneyFieldValue(editor.draft.total_amount)}
                   onChange={(event) => updateDraftNumber("total_amount", event.target.value)}
                   className="input"
                 />
               </Field>
               <Field label="Cuotas">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  placeholder="1"
+                <select
                   value={numberFieldValue(editor.draft.installments_total, false)}
                   onChange={(event) => updateDraftNumber("installments_total", event.target.value)}
                   className="input"
-                />
+                >
+                  {Array.from({ length: 24 }, (_, index) => index + 1).map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
               </Field>
               <Field label="Cuota total">
                 <input
@@ -908,8 +908,7 @@ function DesktopPersonDashboard({
   selectedMonthDetail,
   onTogglePayment,
   onEdit,
-  onDelete,
-  onToggleDebtPaid
+  onDelete
 }: {
   person: MobilePerson;
   personName: string;
@@ -937,7 +936,6 @@ function DesktopPersonDashboard({
   onTogglePayment: (paid: boolean) => void;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onToggleDebtPaid: (debt: Debt) => void;
 }) {
   const projected = projection.reduce((sum, item) => sum + item[person], 0);
   const remaining = debts.reduce((sum, debt) => sum + debt[remainingKey], 0);
@@ -1063,7 +1061,6 @@ function DesktopPersonDashboard({
               month={debtMonth}
               onEdit={onEdit}
               onDelete={onDelete}
-              onTogglePaid={onToggleDebtPaid}
             />
           )}
           <MobileControlView
@@ -1074,7 +1071,6 @@ function DesktopPersonDashboard({
             remainingKey={remainingKey}
             onEdit={onEdit}
             onDelete={onDelete}
-            onTogglePaid={onToggleDebtPaid}
           />
         </div>
       </section>
@@ -1118,8 +1114,7 @@ function MobileShell({
   onCreate,
   onTogglePayment,
   onEdit,
-  onDelete,
-  onToggleDebtPaid
+  onDelete
 }: {
   loading: boolean;
   error: string;
@@ -1162,7 +1157,6 @@ function MobileShell({
   onTogglePayment: (person: "ALAN" | "MAIRON", paid: boolean) => Promise<void>;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onToggleDebtPaid: (debt: Debt) => void;
 }) {
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-lg flex-col gap-4 px-4 pb-28 pt-4 lg:hidden">
@@ -1309,7 +1303,6 @@ function MobileShell({
               onTogglePayment={(paid) => onTogglePayment(mobilePerson === "alan" ? "ALAN" : "MAIRON", paid)}
               onEdit={onEdit}
               onDelete={onDelete}
-              onToggleDebtPaid={onToggleDebtPaid}
             />
           )}
 
@@ -1322,7 +1315,6 @@ function MobileShell({
               remainingKey={mobileRemainingKey}
               onEdit={onEdit}
               onDelete={onDelete}
-              onTogglePaid={onToggleDebtPaid}
             />
           )}
         </>
@@ -1555,8 +1547,7 @@ function MobileMonthView({
   selectedMonthDetail,
   onTogglePayment,
   onEdit,
-  onDelete,
-  onToggleDebtPaid
+  onDelete
 }: {
   personName: string;
   accent: "teal" | "amber";
@@ -1576,7 +1567,6 @@ function MobileMonthView({
   onTogglePayment: (paid: boolean) => void;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onToggleDebtPaid: (debt: Debt) => void;
 }) {
   return (
     <div className="flex flex-col gap-4 animate-fade-up">
@@ -1629,7 +1619,6 @@ function MobileMonthView({
           month={month}
           onEdit={onEdit}
           onDelete={onDelete}
-          onTogglePaid={onToggleDebtPaid}
         />
       )}
     </div>
@@ -1643,8 +1632,7 @@ function MobileControlView({
   monthlyKey,
   remainingKey,
   onEdit,
-  onDelete,
-  onTogglePaid
+  onDelete
 }: {
   personName: string;
   accent: "teal" | "amber";
@@ -1653,7 +1641,6 @@ function MobileControlView({
   remainingKey: "alan_remaining" | "mairon_remaining";
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onTogglePaid: (debt: Debt) => void;
 }) {
   const total = debts.reduce((sum, debt) => sum + debt[remainingKey], 0);
   const active = debts.filter((debt) => debt.status !== "finished").length;
@@ -1687,7 +1674,6 @@ function MobileControlView({
               accent={accent}
               onEdit={onEdit}
               onDelete={onDelete}
-              onTogglePaid={onTogglePaid}
             />
           ))
         )}
@@ -1702,8 +1688,7 @@ function MobileControlDebtRow({
   remainingKey,
   accent,
   onEdit,
-  onDelete,
-  onTogglePaid
+  onDelete
 }: {
   debt: Debt;
   monthlyKey: "alan_monthly" | "mairon_monthly";
@@ -1711,7 +1696,6 @@ function MobileControlDebtRow({
   accent: "teal" | "amber";
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onTogglePaid: (debt: Debt) => void;
 }) {
   return (
     <div className="grid gap-3 px-4 py-3">
@@ -1738,15 +1722,6 @@ function MobileControlDebtRow({
           <div className="text-base font-semibold text-slate-950">{formatCurrency(debt[remainingKey])}</div>
         </div>
         <div className="flex gap-1">
-          <button
-            type="button"
-            title={debt.is_paid ? "Reactivar" : "Marcar pagada"}
-            aria-label={`${debt.is_paid ? "Reactivar" : "Marcar pagada"} ${debt.title}`}
-            onClick={() => onTogglePaid(debt)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-teal-200 text-teal-700 transition hover:bg-slate-50"
-          >
-            <CheckCircle2 size={16} />
-          </button>
           <button
             type="button"
             title="Editar"
@@ -2215,8 +2190,7 @@ function DebtListPanel({
   accent,
   month,
   onEdit,
-  onDelete,
-  onTogglePaid
+  onDelete
 }: {
   name: string;
   debts: Debt[];
@@ -2225,7 +2199,6 @@ function DebtListPanel({
   month: string;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onTogglePaid: (debt: Debt) => void;
 }) {
   const total = debts.reduce((sum, debt) => sum + debt[amountKey], 0);
 
@@ -2260,7 +2233,6 @@ function DebtListPanel({
               accent={accent}
               onEdit={onEdit}
               onDelete={onDelete}
-              onTogglePaid={onTogglePaid}
             />
           ))
         )}
@@ -2275,8 +2247,7 @@ function DebtListRow({
   month,
   accent,
   onEdit,
-  onDelete,
-  onTogglePaid
+  onDelete
 }: {
   debt: Debt;
   amountKey: "alan_monthly" | "mairon_monthly";
@@ -2284,13 +2255,12 @@ function DebtListRow({
   accent: "teal" | "amber";
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
-  onTogglePaid: (debt: Debt) => void;
 }) {
   const progress = Math.min(100, Math.max(0, ((monthNumber(month) - monthNumber(debt.start_month) + 1) / debt.installments_total) * 100));
   const isCustom = debt.payer_mode === "personalizado";
 
   return (
-    <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_7.5rem_7rem_7rem] sm:items-center">
+    <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_7.5rem_7rem] sm:items-center">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="min-w-0 truncate text-sm font-semibold text-slate-950">{debt.title}</h4>
@@ -2321,15 +2291,6 @@ function DebtListRow({
       </div>
 
       <div className="flex justify-end gap-1">
-        <button
-          type="button"
-          title={debt.is_paid ? "Reactivar" : "Marcar pagada"}
-          aria-label={`${debt.is_paid ? "Reactivar" : "Marcar pagada"} ${debt.title}`}
-          onClick={() => onTogglePaid(debt)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 text-teal-700 transition hover:bg-slate-50"
-        >
-          <CheckCircle2 size={16} />
-        </button>
         <button
           type="button"
           title="Editar"
