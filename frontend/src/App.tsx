@@ -242,6 +242,7 @@ export default function App() {
   const alanStatement = statement?.people.find((person) => person.person === "ALAN");
   const maironStatement = statement?.people.find((person) => person.person === "MAIRON");
   const statementItems = selectedMonthDetail?.items ?? [];
+  const hasStatementItems = statementItems.length > 0;
   const filteredStatementItems = statementItems.filter((item) => {
     if (filter === "alan") return item.person === "ALAN";
     if (filter === "mairon") return item.person === "MAIRON";
@@ -264,7 +265,7 @@ export default function App() {
         alan: monthlyDebts.reduce((sum, debt) => sum + debt.alan_monthly, 0),
         mairon: monthlyDebts.reduce((sum, debt) => sum + debt.mairon_monthly, 0)
       };
-  const monthlyPaymentCount = statement ? filteredStatementItems.length : debts.length;
+  const monthlyPaymentCount = hasStatementItems ? filteredStatementItems.length : debts.length;
   const showAlanList = filter !== "mairon";
   const showMaironList = filter !== "alan";
   const mobilePersonName = mobilePerson === "alan" ? "Alan" : "Mairon";
@@ -371,7 +372,7 @@ export default function App() {
         person,
         paid,
         amount,
-        note: paid ? `Pago de ${formatMonth(debtMonth)} confirmado.` : ""
+        note: currentPayment?.note || (paid ? `Pago de ${formatMonth(debtMonth)} confirmado.` : "")
       })
     );
   }
@@ -603,13 +604,13 @@ export default function App() {
           {selectedMonthDetail && <StatementPanel detail={selectedMonthDetail} />}
 
           <div className={classNames("grid gap-4", showAlanList && showMaironList ? "xl:grid-cols-2" : "")}>
-            {statement && showAlanList && (
+            {statement && hasStatementItems && showAlanList && (
               <StatementListPanel name="Alan" items={alanStatementItems} accent="teal" month={debtMonth} />
             )}
-            {statement && showMaironList && (
+            {statement && hasStatementItems && showMaironList && (
               <StatementListPanel name="Mairon" items={maironStatementItems} accent="amber" month={debtMonth} />
             )}
-            {!statement && showAlanList && (
+            {!hasStatementItems && showAlanList && (
               <DebtListPanel
                 name="Alan"
                 debts={alanMonthDebts}
@@ -621,7 +622,7 @@ export default function App() {
                 onTogglePaid={(item) => void toggleDebtPaid(item)}
               />
             )}
-            {!statement && showMaironList && (
+            {!hasStatementItems && showMaironList && (
               <DebtListPanel
                 name="Mairon"
                 debts={maironMonthDebts}
@@ -999,7 +1000,7 @@ function DesktopPersonDashboard({
         )}
 
         <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-          {selectedMonthDetail ? (
+          {statementItems.length > 0 ? (
             <StatementListPanel name={personName} items={statementItems} accent={accent} month={debtMonth} />
           ) : (
             <DebtListPanel
@@ -1558,7 +1559,7 @@ function MobileMonthView({
         </article>
       )}
 
-      {selectedMonthDetail ? (
+      {statementItems.length > 0 ? (
         <StatementListPanel name={personName} items={statementItems} accent={accent} month={month} />
       ) : (
         <DebtListPanel

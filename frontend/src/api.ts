@@ -4,9 +4,12 @@ import type {
   DebtPayload,
   MonthPaymentPayload,
   MonthPaymentsResponse,
+  MonthlyDetailItem,
   MonthlyDetailResponse,
+  MonthlyStatement,
   PaymentPersonStatus,
   ProjectionMonth,
+  StatementPerson,
   SummaryResponse
 } from "./types";
 
@@ -28,6 +31,20 @@ type MonthlyPaymentRow = {
   updated_at: string | null;
 };
 
+type PaymentNoteData = {
+  display_note?: string;
+  settlement?: {
+    excel_current_charges?: number;
+    excel_future_detected?: number;
+    cartola_adjustment?: number;
+    settlement_charges: number;
+    credit_discount: number;
+    pay_now: number;
+  };
+  statement?: Partial<Omit<MonthlyStatement, "month" | "people">>;
+  items?: MonthlyDetailItem[];
+};
+
 let supabase: SupabaseClient | null = null;
 
 function normalizeSupabaseUrl(value: string) {
@@ -44,6 +61,16 @@ function isHttpUrl(value: string) {
 
 function extractJwt(value: string) {
   return value.trim().match(/eyJ[\w-]+\.[\w-]+\.[\w-]+/)?.[0] ?? "";
+}
+
+function parsePaymentNote(value: string | null | undefined): PaymentNoteData | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as PaymentNoteData;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function getSupabase() {
@@ -222,6 +249,72 @@ export async function getSummary(fromMonth: string, months: number): Promise<Sum
 
 export async function getMonthDetail(month: string): Promise<MonthlyDetailResponse> {
   monthStart(month);
+  const { data, error } = await getSupabase()
+    .from("monthly_payments")
+    .select("*")
+    .eq("month", month)
+    .order("person", { ascending: true });
+
+  if (error) throw new Error(error.message);
+
+  const settlementRows = ((data ?? []) as MonthlyPaymentRow[])
+    .map((row) => ({ row, note: parsePaymentNote(row.note) }))
+    .filter((item) => item.note?.settlement);
+
+  if (settlementRows.length > 0) {
+    const people = settlementRows
+      .map<StatementPerson>(({ row, note }) => {
+        const settlement = note?.settlement;
+        return {
+          person: row.person,
+          excel_current_charges: settlement?.excel_current_charges ?? settlement?.settlement_charges ?? 0,
+          excel_future_detected: settlement?.excel_future_detected ?? 0,
+          cartola_adjustment: settlement?.cartola_adjustment ?? 0,
+          settlement_charges: settlement?.settlement_charges ?? 0,
+          credit_discount: settlement?.credit_discount ?? 0,
+          pay_now: settlement?.pay_now ?? row.amount
+        };
+      })
+      .sort((a, b) => (a.person === "ALAN" ? -1 : 1) - (b.person === "ALAN" ? -1 : 1));
+
+    const totals = people.reduce(
+      (acc, person) => ({
+        charges: acc.charges + person.settlement_charges,
+        discount: acc.discount + person.credit_discount,
+        payNow: acc.payNow + person.pay_now
+      }),
+      { charges: 0, discount: 0, payNow: 0 }
+    );
+    const statementData = settlementRows.find((item) => item.note?.statement)?.note?.statement ?? {};
+    const items = settlementRows.find((item) => item.note?.items?.length)?.note?.items ?? [];
+    const statement: MonthlyStatement = {
+      month,
+      label: statementData.label ?? month,
+      source_excel: statementData.source_excel ?? "",
+      source_pdf: statementData.source_pdf ?? "",
+      due_date: statementData.due_date ?? "",
+      statement_total_to_pay: statementData.statement_total_to_pay ?? totals.payNow,
+      statement_minimum_to_pay: statementData.statement_minimum_to_pay ?? 0,
+      current_charges_total: statementData.current_charges_total ?? totals.charges,
+      previous_credit: statementData.previous_credit ?? totals.discount,
+      previous_period_billed: statementData.previous_period_billed ?? 0,
+      previous_period_paid: statementData.previous_period_paid ?? 0,
+      notes: statementData.notes ?? "",
+      people
+    };
+
+    return {
+      month,
+      statement,
+      items,
+      totals: {
+        current: items.length ? items.filter((item) => item.is_current).reduce((sum, item) => sum + item.person_amount, 0) : totals.charges,
+        future: items.filter((item) => item.is_future).reduce((sum, item) => sum + item.person_amount, 0),
+        all: items.length ? items.reduce((sum, item) => sum + item.person_amount, 0) : totals.charges
+      }
+    };
+  }
+
   return {
     month,
     statement: null,
