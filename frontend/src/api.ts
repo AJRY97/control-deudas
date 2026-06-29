@@ -30,11 +30,15 @@ type MonthlyPaymentRow = {
 
 let supabase: SupabaseClient | null = null;
 
+function normalizeSupabaseUrl(value: string) {
+  return value.trim().replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, "");
+}
+
 function getSupabase() {
   if (supabase) return supabase;
 
-  const url = import.meta.env.VITE_SUPABASE_URL;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const url = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL ?? "");
+  const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? "").trim();
 
   if (!url || !anonKey) {
     throw new Error("Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.");

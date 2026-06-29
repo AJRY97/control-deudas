@@ -25,7 +25,7 @@ VITE_SUPABASE_ANON_KEY=tu-anon-public-key
 
 En Vercel agrega las mismas variables en `Project Settings` -> `Environment Variables`:
 
-- `VITE_SUPABASE_URL`: pega el `Project URL` de Supabase.
+- `VITE_SUPABASE_URL`: pega el `Project URL` de Supabase, por ejemplo `https://tu-proyecto.supabase.co`. No pegues la `API URL` con `/rest/v1/`.
 - `VITE_SUPABASE_ANON_KEY`: pega la `anon public key` de Supabase.
 
 No pegues la contrasena de Supabase en Vercel ni en el frontend.
