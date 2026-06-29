@@ -74,6 +74,10 @@ function formatCurrency(value: number) {
   return currency.format(value || 0);
 }
 
+function numberFieldValue(value: number, emptyWhenZero = true) {
+  return emptyWhenZero && value === 0 ? "" : String(value);
+}
+
 function formatMonth(value: string | null) {
   if (!value) return "Sin pagos";
   const [year, month] = value.split("-").map(Number);
@@ -755,8 +759,10 @@ export default function App() {
               <Field label="Total deuda">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min={0}
-                  value={editor.draft.total_amount}
+                  placeholder="0"
+                  value={numberFieldValue(editor.draft.total_amount)}
                   onChange={(event) => updateDraftNumber("total_amount", event.target.value)}
                   className="input"
                 />
@@ -764,8 +770,10 @@ export default function App() {
               <Field label="Cuotas">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min={1}
-                  value={editor.draft.installments_total}
+                  placeholder="1"
+                  value={numberFieldValue(editor.draft.installments_total, false)}
                   onChange={(event) => updateDraftNumber("installments_total", event.target.value)}
                   className="input"
                 />
@@ -773,8 +781,10 @@ export default function App() {
               <Field label="Cuota total">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min={0}
-                  value={editor.draft.monthly_installment}
+                  placeholder="0"
+                  value={numberFieldValue(editor.draft.monthly_installment)}
                   onChange={(event) => updateDraftNumber("monthly_installment", event.target.value)}
                   className="input"
                 />
@@ -801,8 +811,10 @@ export default function App() {
               <Field label="Alan paga">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min={0}
-                  value={editor.draft.alan_monthly}
+                  placeholder="0"
+                  value={numberFieldValue(editor.draft.alan_monthly)}
                   onChange={(event) => updateDraftNumber("alan_monthly", event.target.value)}
                   className="input"
                 />
@@ -810,8 +822,10 @@ export default function App() {
               <Field label="Mairon paga">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min={0}
-                  value={editor.draft.mairon_monthly}
+                  placeholder="0"
+                  value={numberFieldValue(editor.draft.mairon_monthly)}
                   onChange={(event) => updateDraftNumber("mairon_monthly", event.target.value)}
                   className="input"
                 />
@@ -1182,6 +1196,7 @@ function MobileShell({
       {!mobilePerson ? (
         <MobilePersonMenu
           loading={loading}
+          month={debtMonth}
           alanProjected={alanProjected}
           maironProjected={maironProjected}
           alanMonthTotal={alanMonthTotal}
@@ -1328,6 +1343,7 @@ function MobileShell({
 
 function MobilePersonMenu({
   loading,
+  month,
   alanProjected,
   maironProjected,
   alanMonthTotal,
@@ -1337,6 +1353,7 @@ function MobilePersonMenu({
   onSelect
 }: {
   loading: boolean;
+  month: string;
   alanProjected: number;
   maironProjected: number;
   alanMonthTotal: number;
@@ -1354,6 +1371,7 @@ function MobilePersonMenu({
       <MobilePersonButton
         name="Alan"
         accent="teal"
+        month={month}
         projected={alanProjected}
         monthTotal={alanMonthTotal}
         payment={alanPayment}
@@ -1362,6 +1380,7 @@ function MobilePersonMenu({
       <MobilePersonButton
         name="Mairon"
         accent="amber"
+        month={month}
         projected={maironProjected}
         monthTotal={maironMonthTotal}
         payment={maironPayment}
@@ -1374,6 +1393,7 @@ function MobilePersonMenu({
 function MobilePersonButton({
   name,
   accent,
+  month,
   projected,
   monthTotal,
   payment,
@@ -1381,6 +1401,7 @@ function MobilePersonButton({
 }: {
   name: string;
   accent: "teal" | "amber";
+  month: string;
   projected: number;
   monthTotal: number;
   payment?: PaymentPersonStatus;
@@ -1405,7 +1426,7 @@ function MobilePersonButton({
           <div className="mt-3 text-xl font-semibold text-slate-950">{name}</div>
         </div>
         <div className="text-right">
-          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Mes</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Pago {formatMonth(month)}</div>
           <div className="mt-1 text-base font-semibold text-slate-950">{formatCurrency(monthTotal)}</div>
           <PaymentBadge paid={payment?.paid ?? false} compact />
         </div>
