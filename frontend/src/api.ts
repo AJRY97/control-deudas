@@ -32,8 +32,9 @@ let supabase: SupabaseClient | null = null;
 
 function normalizeSupabaseUrl(value: string) {
   const trimmed = value.trim();
-  const url = trimmed.match(/https?:\/\/\S+/)?.[0] ?? trimmed;
-  return url.replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, "");
+  const extracted = trimmed.match(/https?:\/\/\S+/)?.[0] ?? trimmed;
+  const withProtocol = extracted.startsWith("http") ? extracted : extracted.replace(/^([\w-]+\.supabase\.co)/, "https://$1");
+  return withProtocol.replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, "");
 }
 
 function getSupabase() {
