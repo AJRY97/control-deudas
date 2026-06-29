@@ -4,6 +4,9 @@ import {
   ArrowLeft,
   CalendarDays,
   ChartNoAxesColumnIncreasing,
+  CheckCircle2,
+  CircleDollarSign,
+  Clock3,
   ListChecks,
   Pencil,
   Plus,
@@ -15,12 +18,14 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { createDebt, deleteDebt, getMonthDetail, getSummary, updateDebt } from "./api";
+import { createDebt, deleteDebt, getMonthDetail, getMonthPayments, getSummary, markDebtPaid, updateDebt, updateMonthPayment } from "./api";
 import type {
   Debt,
   DebtPayload,
+  MonthPaymentsResponse,
   MonthlyDetailItem,
   MonthlyDetailResponse,
+  PaymentPersonStatus,
   PayerMode,
   ProjectionMonth,
   SummaryResponse
@@ -29,10 +34,11 @@ import type {
 type FilterKey = "todos" | "alan" | "mairon" | "compartidas";
 type MobilePerson = "alan" | "mairon";
 type MobileView = "projection" | "month" | "control";
+type DesktopScope = MobilePerson | "both";
 
 interface EditorState {
   mode: "create" | "edit";
-  id?: number;
+  id?: string;
   draft: DebtPayload;
 }
 
@@ -70,6 +76,17 @@ function formatDate(value: string | null) {
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(year, month - 1, day);
   return new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "short", year: "numeric" }).format(date);
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "Sin confirmar";
+  const date = new Date(value);
+  return new Intl.DateTimeFormat("es-CL", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function monthNumber(value: string) {
@@ -153,8 +170,10 @@ export default function App() {
   const [filter, setFilter] = useState<FilterKey>("todos");
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [monthDetail, setMonthDetail] = useState<MonthlyDetailResponse | null>(null);
+  const [monthPayments, setMonthPayments] = useState<MonthPaymentsResponse | null>(null);
   const [mobilePerson, setMobilePerson] = useState<MobilePerson | null>(null);
   const [mobileView, setMobileView] = useState<MobileView>("month");
+  const [desktopScope, setDesktopScope] = useState<DesktopScope>("both");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
@@ -180,6 +199,14 @@ export default function App() {
     }
   }
 
+  async function loadMonthPayments(month = debtMonth) {
+    try {
+      setMonthPayments(await getMonthPayments(month));
+    } catch {
+      setMonthPayments(null);
+    }
+  }
+
   useEffect(() => {
     void load();
   }, [fromMonth, months]);
@@ -190,6 +217,7 @@ export default function App() {
 
   useEffect(() => {
     void loadMonthDetail(debtMonth);
+    void loadMonthPayments(debtMonth);
   }, [debtMonth]);
 
   const allDebts = summary?.debts ?? [];
@@ -248,6 +276,21 @@ export default function App() {
   const mobileRemainingKey = mobilePerson === "alan" ? "alan_remaining" : "mairon_remaining";
   const mobileMonthlyTotal = mobilePerson === "alan" ? monthTotals.alan : monthTotals.mairon;
   const mobileStatementPerson = mobilePerson === "alan" ? alanStatement : maironStatement;
+  const selectedMonthPayments = monthPayments?.month === debtMonth ? monthPayments : null;
+  const alanPayment = selectedMonthPayments?.people.find((person) => person.person === "ALAN");
+  const maironPayment = selectedMonthPayments?.people.find((person) => person.person === "MAIRON");
+  const mobilePayment = mobilePerson === "alan" ? alanPayment : maironPayment;
+  const desktopPerson = desktopScope === "both" ? null : desktopScope;
+  const desktopPersonName = desktopPerson === "alan" ? "Alan" : "Mairon";
+  const desktopAccent = desktopPerson === "alan" ? "teal" : "amber";
+  const desktopDebts = desktopPerson === "alan" ? alanDebts : maironDebts;
+  const desktopMonthDebts = desktopPerson === "alan" ? alanMonthDebts : maironMonthDebts;
+  const desktopStatementItems = desktopPerson === "alan" ? alanMobileStatementItems : maironMobileStatementItems;
+  const desktopAmountKey = desktopPerson === "alan" ? "alan_monthly" : "mairon_monthly";
+  const desktopRemainingKey = desktopPerson === "alan" ? "alan_remaining" : "mairon_remaining";
+  const desktopMonthlyTotal = desktopPerson === "alan" ? monthTotals.alan : monthTotals.mairon;
+  const desktopStatementPerson = desktopPerson === "alan" ? alanStatement : maironStatement;
+  const desktopPayment = desktopPerson === "alan" ? alanPayment : maironPayment;
 
   function openCreate() {
     setEditor({ mode: "create", draft: defaultDraft(fromMonth) });
@@ -261,6 +304,13 @@ export default function App() {
     if (!window.confirm(`Eliminar ${debt.title}?`)) return;
     await deleteDebt(debt.id);
     await load();
+    await loadMonthPayments(debtMonth);
+  }
+
+  async function toggleDebtPaid(debt: Debt) {
+    await markDebtPaid(debt.id, !debt.is_paid);
+    await load();
+    await loadMonthPayments(debtMonth);
   }
 
   async function saveDebt(event: FormEvent<HTMLFormElement>) {
@@ -273,6 +323,7 @@ export default function App() {
     }
     setEditor(null);
     await load();
+    await loadMonthPayments(debtMonth);
   }
 
   function updateDraft(next: DebtPayload) {
@@ -311,6 +362,20 @@ export default function App() {
     updateDraft(syncShares(editor.draft, mode));
   }
 
+  async function toggleMonthPayment(person: "ALAN" | "MAIRON", paid: boolean) {
+    const currentPayment = person === "ALAN" ? alanPayment : maironPayment;
+    const amount = currentPayment?.amount ?? currentPayment?.expected_amount ?? 0;
+    setMonthPayments(
+      await updateMonthPayment({
+        month: debtMonth,
+        person,
+        paid,
+        amount,
+        note: paid ? `Pago de ${formatMonth(debtMonth)} confirmado.` : ""
+      })
+    );
+  }
+
   return (
     <main className="theme-dark min-h-screen bg-[#070b13] text-slate-100">
       <MobileShell
@@ -337,18 +402,24 @@ export default function App() {
         mobileRemainingKey={mobileRemainingKey}
         mobileMonthlyTotal={mobileMonthlyTotal}
         mobileStatementPerson={mobileStatementPerson}
+        mobilePayment={mobilePayment}
         selectedMonthDetail={selectedMonthDetail}
         alanProjected={summary?.stats.alan_projected ?? 0}
         maironProjected={summary?.stats.mairon_projected ?? 0}
         alanMonthTotal={monthTotals.alan}
         maironMonthTotal={monthTotals.mairon}
+        alanPayment={alanPayment}
+        maironPayment={maironPayment}
         onRefresh={() => {
           void load();
           void loadMonthDetail(debtMonth);
+          void loadMonthPayments(debtMonth);
         }}
         onCreate={openCreate}
+        onTogglePayment={toggleMonthPayment}
         onEdit={openEdit}
         onDelete={(item) => void removeDebt(item)}
+        onToggleDebtPaid={(item) => void toggleDebtPaid(item)}
       />
 
       <div className="mx-auto hidden w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:flex lg:px-8">
@@ -389,6 +460,7 @@ export default function App() {
               onClick={() => {
                 void load();
                 void loadMonthDetail(debtMonth);
+                void loadMonthPayments(debtMonth);
               }}
               title="Actualizar"
               aria-label="Actualizar"
@@ -413,6 +485,10 @@ export default function App() {
           </div>
         )}
 
+        <DesktopScopeTabs value={desktopScope} onChange={setDesktopScope} />
+
+        {desktopScope === "both" ? (
+          <>
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             icon={<UserRound size={18} />}
@@ -517,6 +593,13 @@ export default function App() {
             <MonthTotal label="Total del mes" value={monthTotals.alan + monthTotals.mairon} tone="slate" />
           </div>
 
+          <MonthPaymentPanel
+            month={debtMonth}
+            alan={alanPayment}
+            mairon={maironPayment}
+            onToggle={(person, paid) => void toggleMonthPayment(person, paid)}
+          />
+
           {selectedMonthDetail && <StatementPanel detail={selectedMonthDetail} />}
 
           <div className={classNames("grid gap-4", showAlanList && showMaironList ? "xl:grid-cols-2" : "")}>
@@ -535,6 +618,7 @@ export default function App() {
                 month={debtMonth}
                 onEdit={openEdit}
                 onDelete={(item) => void removeDebt(item)}
+                onTogglePaid={(item) => void toggleDebtPaid(item)}
               />
             )}
             {!statement && showMaironList && (
@@ -546,10 +630,38 @@ export default function App() {
                 month={debtMonth}
                 onEdit={openEdit}
                 onDelete={(item) => void removeDebt(item)}
+                onTogglePaid={(item) => void toggleDebtPaid(item)}
               />
             )}
           </div>
         </section>
+          </>
+        ) : (
+          <DesktopPersonDashboard
+            person={desktopScope}
+            personName={desktopPersonName}
+            accent={desktopAccent}
+            projection={summary?.projection ?? []}
+            months={months}
+            setMonths={setMonths}
+            debtMonth={debtMonth}
+            setDebtMonth={setDebtMonth}
+            debtMonthOptions={debtMonthOptions}
+            debts={desktopDebts}
+            monthDebts={desktopMonthDebts}
+            statementItems={desktopStatementItems}
+            amountKey={desktopAmountKey}
+            remainingKey={desktopRemainingKey}
+            monthlyTotal={desktopMonthlyTotal}
+            statementPerson={desktopStatementPerson}
+            payment={desktopPayment}
+            selectedMonthDetail={selectedMonthDetail}
+            onTogglePayment={(paid) => void toggleMonthPayment(desktopScope === "alan" ? "ALAN" : "MAIRON", paid)}
+            onEdit={openEdit}
+            onDelete={(item) => void removeDebt(item)}
+            onToggleDebtPaid={(item) => void toggleDebtPaid(item)}
+          />
+        )}
       </div>
 
       {editor && (
@@ -693,6 +805,230 @@ export default function App() {
   );
 }
 
+function DesktopScopeTabs({ value, onChange }: { value: DesktopScope; onChange: (value: DesktopScope) => void }) {
+  const options: Array<{ key: DesktopScope; label: string; icon: ReactNode }> = [
+    { key: "alan", label: "Alan", icon: <UserRound size={17} /> },
+    { key: "mairon", label: "Mairon", icon: <UserRound size={17} /> },
+    { key: "both", label: "Ambos", icon: <Users size={17} /> }
+  ];
+
+  return (
+    <nav className="grid grid-cols-3 gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-soft animate-fade-up">
+      {options.map((option) => (
+        <button
+          key={option.key}
+          type="button"
+          onClick={() => onChange(option.key)}
+          className={classNames(
+            "inline-flex h-11 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold transition",
+            value === option.key
+              ? "border-slate-950 bg-slate-950 text-white"
+              : "border-slate-300 bg-white text-slate-700 hover:border-slate-500"
+          )}
+        >
+          {option.icon}
+          {option.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function DesktopPersonDashboard({
+  person,
+  personName,
+  accent,
+  projection,
+  months,
+  setMonths,
+  debtMonth,
+  setDebtMonth,
+  debtMonthOptions,
+  debts,
+  monthDebts,
+  statementItems,
+  amountKey,
+  remainingKey,
+  monthlyTotal,
+  statementPerson,
+  payment,
+  selectedMonthDetail,
+  onTogglePayment,
+  onEdit,
+  onDelete,
+  onToggleDebtPaid
+}: {
+  person: MobilePerson;
+  personName: string;
+  accent: "teal" | "amber";
+  projection: ProjectionMonth[];
+  months: number;
+  setMonths: (value: number) => void;
+  debtMonth: string;
+  setDebtMonth: (value: string) => void;
+  debtMonthOptions: string[];
+  debts: Debt[];
+  monthDebts: Debt[];
+  statementItems: MonthlyDetailItem[];
+  amountKey: "alan_monthly" | "mairon_monthly";
+  remainingKey: "alan_remaining" | "mairon_remaining";
+  monthlyTotal: number;
+  statementPerson?: {
+    settlement_charges: number;
+    credit_discount: number;
+    pay_now: number;
+    cartola_adjustment?: number;
+  };
+  payment?: PaymentPersonStatus;
+  selectedMonthDetail: MonthlyDetailResponse | null;
+  onTogglePayment: (paid: boolean) => void;
+  onEdit: (debt: Debt) => void;
+  onDelete: (debt: Debt) => void;
+  onToggleDebtPaid: (debt: Debt) => void;
+}) {
+  const projected = projection.reduce((sum, item) => sum + item[person], 0);
+  const remaining = debts.reduce((sum, debt) => sum + debt[remainingKey], 0);
+  const active = debts.filter((debt) => debt.status !== "finished").length;
+  const payNow = statementPerson?.pay_now ?? monthlyTotal;
+
+  return (
+    <div className="flex flex-col gap-5 pb-8">
+      <section className="grid gap-3 xl:grid-cols-4">
+        <MetricCard
+          icon={<UserRound size={18} />}
+          label={`${personName} proyectado`}
+          value={formatCurrency(projected)}
+          tone={accent}
+          detail={`${active} deudas activas`}
+        />
+        <MetricCard
+          icon={<CalendarDays size={18} />}
+          label={`${personName} en el mes`}
+          value={formatCurrency(monthlyTotal)}
+          tone={accent}
+          detail={formatMonth(debtMonth)}
+        />
+        <MetricCard
+          icon={<CircleDollarSign size={18} />}
+          label="Paga ahora"
+          value={formatCurrency(payNow)}
+          tone={accent}
+          detail={payment?.paid ? "Pago confirmado" : "Pendiente de confirmar"}
+        />
+        <MetricCard
+          icon={<ListChecks size={18} />}
+          label="Pendiente total"
+          value={formatCurrency(remaining)}
+          tone="indigo"
+          detail="Control de cuotas"
+        />
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+        <MobileProjectionView
+          person={person}
+          personName={personName}
+          accent={accent}
+          projection={projection}
+          months={months}
+          setMonths={setMonths}
+        />
+        <div className="grid gap-3">
+          <PaymentPersonCard
+            name={personName}
+            person={person === "alan" ? "ALAN" : "MAIRON"}
+            payment={payment}
+            accent={accent}
+            onToggle={(_, paid) => onTogglePayment(paid)}
+          />
+          <PersonPanel name={personName} debts={debts} amountKey={remainingKey} accent={accent} />
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-950">{personName}: detalle del mes</h2>
+            <p className="text-sm text-slate-500">{formatMonth(debtMonth)}</p>
+          </div>
+          <label className="flex w-fit flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+            Mes listado
+            <select
+              value={debtMonth}
+              onChange={(event) => setDebtMonth(event.target.value)}
+              className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+            >
+              {debtMonthOptions.map((month) => (
+                <option key={month} value={month}>
+                  {formatMonth(month)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <MonthTotal label={`${personName} en el mes`} value={monthlyTotal} tone={accent} />
+          <MonthTotal label={payment?.paid ? "Pago confirmado" : "Pago pendiente"} value={payment?.amount ?? payNow} tone="slate" />
+        </div>
+
+        {statementPerson && (
+          <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft animate-fade-up">
+            <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-950">Paga ahora {personName}</h3>
+                <p className="text-sm text-slate-500">
+                  Vence {formatDate(selectedMonthDetail?.statement?.due_date ?? null)}
+                </p>
+              </div>
+              <span
+                className={classNames(
+                  "inline-flex w-fit rounded-md px-3 py-2 text-sm font-semibold",
+                  accent === "teal" ? "bg-teal-50 text-teal-900" : "bg-amber-50 text-amber-900"
+                )}
+              >
+                {formatCurrency(statementPerson.pay_now)}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              <StatementCell label="Cargos" value={statementPerson.settlement_charges} />
+              <StatementCell label="Descuento" value={-statementPerson.credit_discount} />
+              <StatementCell label="Ajuste" value={statementPerson.cartola_adjustment ?? 0} />
+            </div>
+          </article>
+        )}
+
+        <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+          {selectedMonthDetail ? (
+            <StatementListPanel name={personName} items={statementItems} accent={accent} month={debtMonth} />
+          ) : (
+            <DebtListPanel
+              name={personName}
+              debts={monthDebts}
+              amountKey={amountKey}
+              accent={accent}
+              month={debtMonth}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onTogglePaid={onToggleDebtPaid}
+            />
+          )}
+          <MobileControlView
+            personName={personName}
+            accent={accent}
+            debts={debts}
+            monthlyKey={amountKey}
+            remainingKey={remainingKey}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onTogglePaid={onToggleDebtPaid}
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function MobileShell({
   loading,
   error,
@@ -717,15 +1053,20 @@ function MobileShell({
   mobileRemainingKey,
   mobileMonthlyTotal,
   mobileStatementPerson,
+  mobilePayment,
   selectedMonthDetail,
   alanProjected,
   maironProjected,
   alanMonthTotal,
   maironMonthTotal,
+  alanPayment,
+  maironPayment,
   onRefresh,
   onCreate,
+  onTogglePayment,
   onEdit,
-  onDelete
+  onDelete,
+  onToggleDebtPaid
 }: {
   loading: boolean;
   error: string;
@@ -755,15 +1096,20 @@ function MobileShell({
     pay_now: number;
     cartola_adjustment?: number;
   };
+  mobilePayment?: PaymentPersonStatus;
   selectedMonthDetail: MonthlyDetailResponse | null;
   alanProjected: number;
   maironProjected: number;
   alanMonthTotal: number;
   maironMonthTotal: number;
+  alanPayment?: PaymentPersonStatus;
+  maironPayment?: PaymentPersonStatus;
   onRefresh: () => void;
   onCreate: () => void;
+  onTogglePayment: (person: "ALAN" | "MAIRON", paid: boolean) => Promise<void>;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
+  onToggleDebtPaid: (debt: Debt) => void;
 }) {
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-lg flex-col gap-4 px-4 pb-28 pt-4 lg:hidden">
@@ -801,6 +1147,8 @@ function MobileShell({
           maironProjected={maironProjected}
           alanMonthTotal={alanMonthTotal}
           maironMonthTotal={maironMonthTotal}
+          alanPayment={alanPayment}
+          maironPayment={maironPayment}
           onSelect={(person) => {
             setMobilePerson(person);
             setMobileView("month");
@@ -902,9 +1250,12 @@ function MobileShell({
               monthlyTotal={mobileMonthlyTotal}
               statementItems={mobileStatementItems}
               statementPerson={mobileStatementPerson}
+              payment={mobilePayment}
               selectedMonthDetail={selectedMonthDetail}
+              onTogglePayment={(paid) => onTogglePayment(mobilePerson === "alan" ? "ALAN" : "MAIRON", paid)}
               onEdit={onEdit}
               onDelete={onDelete}
+              onToggleDebtPaid={onToggleDebtPaid}
             />
           )}
 
@@ -917,6 +1268,7 @@ function MobileShell({
               remainingKey={mobileRemainingKey}
               onEdit={onEdit}
               onDelete={onDelete}
+              onTogglePaid={onToggleDebtPaid}
             />
           )}
         </>
@@ -941,6 +1293,8 @@ function MobilePersonMenu({
   maironProjected,
   alanMonthTotal,
   maironMonthTotal,
+  alanPayment,
+  maironPayment,
   onSelect
 }: {
   loading: boolean;
@@ -948,6 +1302,8 @@ function MobilePersonMenu({
   maironProjected: number;
   alanMonthTotal: number;
   maironMonthTotal: number;
+  alanPayment?: PaymentPersonStatus;
+  maironPayment?: PaymentPersonStatus;
   onSelect: (person: MobilePerson) => void;
 }) {
   return (
@@ -961,6 +1317,7 @@ function MobilePersonMenu({
         accent="teal"
         projected={alanProjected}
         monthTotal={alanMonthTotal}
+        payment={alanPayment}
         onClick={() => onSelect("alan")}
       />
       <MobilePersonButton
@@ -968,6 +1325,7 @@ function MobilePersonMenu({
         accent="amber"
         projected={maironProjected}
         monthTotal={maironMonthTotal}
+        payment={maironPayment}
         onClick={() => onSelect("mairon")}
       />
     </div>
@@ -979,12 +1337,14 @@ function MobilePersonButton({
   accent,
   projected,
   monthTotal,
+  payment,
   onClick
 }: {
   name: string;
   accent: "teal" | "amber";
   projected: number;
   monthTotal: number;
+  payment?: PaymentPersonStatus;
   onClick: () => void;
 }) {
   return (
@@ -1008,6 +1368,7 @@ function MobilePersonButton({
         <div className="text-right">
           <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Mes</div>
           <div className="mt-1 text-base font-semibold text-slate-950">{formatCurrency(monthTotal)}</div>
+          <PaymentBadge paid={payment?.paid ?? false} compact />
         </div>
       </div>
       <div className="mt-4 rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -1130,9 +1491,12 @@ function MobileMonthView({
   monthlyTotal,
   statementItems,
   statementPerson,
+  payment,
   selectedMonthDetail,
+  onTogglePayment,
   onEdit,
-  onDelete
+  onDelete,
+  onToggleDebtPaid
 }: {
   personName: string;
   accent: "teal" | "amber";
@@ -1147,13 +1511,24 @@ function MobileMonthView({
     pay_now: number;
     cartola_adjustment?: number;
   };
+  payment?: PaymentPersonStatus;
   selectedMonthDetail: MonthlyDetailResponse | null;
+  onTogglePayment: (paid: boolean) => void;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
+  onToggleDebtPaid: (debt: Debt) => void;
 }) {
   return (
     <div className="flex flex-col gap-4 animate-fade-up">
       <MonthTotal label={`${personName} en el mes`} value={monthlyTotal} tone={accent} />
+
+      <PaymentPersonCard
+        name={personName}
+        person={personName.toUpperCase() as "ALAN" | "MAIRON"}
+        payment={payment}
+        accent={accent}
+        onToggle={(_, paid) => onTogglePayment(paid)}
+      />
 
       {statementPerson && (
         <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
@@ -1194,6 +1569,7 @@ function MobileMonthView({
           month={month}
           onEdit={onEdit}
           onDelete={onDelete}
+          onTogglePaid={onToggleDebtPaid}
         />
       )}
     </div>
@@ -1207,7 +1583,8 @@ function MobileControlView({
   monthlyKey,
   remainingKey,
   onEdit,
-  onDelete
+  onDelete,
+  onTogglePaid
 }: {
   personName: string;
   accent: "teal" | "amber";
@@ -1216,6 +1593,7 @@ function MobileControlView({
   remainingKey: "alan_remaining" | "mairon_remaining";
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
+  onTogglePaid: (debt: Debt) => void;
 }) {
   const total = debts.reduce((sum, debt) => sum + debt[remainingKey], 0);
   const active = debts.filter((debt) => debt.status !== "finished").length;
@@ -1249,6 +1627,7 @@ function MobileControlView({
               accent={accent}
               onEdit={onEdit}
               onDelete={onDelete}
+              onTogglePaid={onTogglePaid}
             />
           ))
         )}
@@ -1263,7 +1642,8 @@ function MobileControlDebtRow({
   remainingKey,
   accent,
   onEdit,
-  onDelete
+  onDelete,
+  onTogglePaid
 }: {
   debt: Debt;
   monthlyKey: "alan_monthly" | "mairon_monthly";
@@ -1271,6 +1651,7 @@ function MobileControlDebtRow({
   accent: "teal" | "amber";
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
+  onTogglePaid: (debt: Debt) => void;
 }) {
   return (
     <div className="grid gap-3 px-4 py-3">
@@ -1297,6 +1678,15 @@ function MobileControlDebtRow({
           <div className="text-base font-semibold text-slate-950">{formatCurrency(debt[remainingKey])}</div>
         </div>
         <div className="flex gap-1">
+          <button
+            type="button"
+            title={debt.is_paid ? "Reactivar" : "Marcar pagada"}
+            aria-label={`${debt.is_paid ? "Reactivar" : "Marcar pagada"} ${debt.title}`}
+            onClick={() => onTogglePaid(debt)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-teal-200 text-teal-700 transition hover:bg-slate-50"
+          >
+            <CheckCircle2 size={16} />
+          </button>
           <button
             type="button"
             title="Editar"
@@ -1432,6 +1822,105 @@ function MonthTotal({ label, value, tone }: { label: string; value: number; tone
     <div className={classNames("rounded-lg border px-4 py-3 shadow-soft", toneClass)}>
       <div className="text-xs font-semibold uppercase tracking-[0.12em] opacity-70">{label}</div>
       <div className="mt-1 text-xl font-semibold tracking-normal">{formatCurrency(value)}</div>
+    </div>
+  );
+}
+
+function PaymentBadge({ paid, compact = false }: { paid: boolean; compact?: boolean }) {
+  return (
+    <span
+      className={classNames(
+        "inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold",
+        compact ? "mt-2 text-xs" : "text-sm",
+        paid ? "bg-teal-50 text-teal-900" : "bg-rose-50 text-rose-700"
+      )}
+    >
+      {paid ? <CheckCircle2 size={compact ? 13 : 15} /> : <Clock3 size={compact ? 13 : 15} />}
+      {paid ? "Pagado" : "Pendiente"}
+    </span>
+  );
+}
+
+function MonthPaymentPanel({
+  month,
+  alan,
+  mairon,
+  onToggle
+}: {
+  month: string;
+  alan?: PaymentPersonStatus;
+  mairon?: PaymentPersonStatus;
+  onToggle: (person: "ALAN" | "MAIRON", paid: boolean) => void;
+}) {
+  const paidTotal = [alan, mairon].reduce((sum, item) => sum + (item?.paid ? item.amount : 0), 0);
+
+  return (
+    <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft animate-fade-up">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.12em] text-teal-700">
+            <CircleDollarSign size={17} />
+            Pago del mes
+          </div>
+          <h3 className="mt-1 text-lg font-semibold text-slate-950">{formatMonth(month)}</h3>
+        </div>
+        <span className="inline-flex w-fit rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+          Confirmado {formatCurrency(paidTotal)}
+        </span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <PaymentPersonCard name="Alan" person="ALAN" payment={alan} accent="teal" onToggle={onToggle} />
+        <PaymentPersonCard name="Mairon" person="MAIRON" payment={mairon} accent="amber" onToggle={onToggle} />
+      </div>
+    </article>
+  );
+}
+
+function PaymentPersonCard({
+  name,
+  person,
+  payment,
+  accent,
+  onToggle
+}: {
+  name: string;
+  person: "ALAN" | "MAIRON";
+  payment?: PaymentPersonStatus;
+  accent: "teal" | "amber";
+  onToggle: (person: "ALAN" | "MAIRON", paid: boolean) => void;
+}) {
+  const paid = payment?.paid ?? false;
+  const amount = payment?.amount ?? payment?.expected_amount ?? 0;
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div
+            className={classNames(
+              "inline-flex rounded-md px-2 py-1 text-sm font-semibold",
+              accent === "teal" ? "bg-teal-50 text-teal-900" : "bg-amber-50 text-amber-900"
+            )}
+          >
+            {name}
+          </div>
+          <div className="mt-2 text-xl font-semibold text-slate-950">{formatCurrency(amount)}</div>
+          <div className="mt-1 text-xs text-slate-500">{paid ? formatDateTime(payment?.paid_at ?? null) : "Aun no confirmado"}</div>
+        </div>
+        <PaymentBadge paid={paid} />
+      </div>
+      <button
+        type="button"
+        onClick={() => onToggle(person, !paid)}
+        className={classNames(
+          "mt-3 inline-flex h-9 w-full items-center justify-center rounded-md border px-3 text-sm font-semibold transition",
+          paid
+            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            : "border-slate-950 bg-slate-950 text-white hover:bg-slate-800"
+        )}
+      >
+        {paid ? "Marcar pendiente" : "Confirmar pago"}
+      </button>
     </div>
   );
 }
@@ -1666,7 +2155,8 @@ function DebtListPanel({
   accent,
   month,
   onEdit,
-  onDelete
+  onDelete,
+  onTogglePaid
 }: {
   name: string;
   debts: Debt[];
@@ -1675,6 +2165,7 @@ function DebtListPanel({
   month: string;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
+  onTogglePaid: (debt: Debt) => void;
 }) {
   const total = debts.reduce((sum, debt) => sum + debt[amountKey], 0);
 
@@ -1709,6 +2200,7 @@ function DebtListPanel({
               accent={accent}
               onEdit={onEdit}
               onDelete={onDelete}
+              onTogglePaid={onTogglePaid}
             />
           ))
         )}
@@ -1723,7 +2215,8 @@ function DebtListRow({
   month,
   accent,
   onEdit,
-  onDelete
+  onDelete,
+  onTogglePaid
 }: {
   debt: Debt;
   amountKey: "alan_monthly" | "mairon_monthly";
@@ -1731,12 +2224,13 @@ function DebtListRow({
   accent: "teal" | "amber";
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
+  onTogglePaid: (debt: Debt) => void;
 }) {
   const progress = Math.min(100, Math.max(0, ((monthNumber(month) - monthNumber(debt.start_month) + 1) / debt.installments_total) * 100));
   const isCustom = debt.payer_mode === "personalizado";
 
   return (
-    <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_7.5rem_7rem_4.75rem] sm:items-center">
+    <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_7.5rem_7rem_7rem] sm:items-center">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="min-w-0 truncate text-sm font-semibold text-slate-950">{debt.title}</h4>
@@ -1767,6 +2261,15 @@ function DebtListRow({
       </div>
 
       <div className="flex justify-end gap-1">
+        <button
+          type="button"
+          title={debt.is_paid ? "Reactivar" : "Marcar pagada"}
+          aria-label={`${debt.is_paid ? "Reactivar" : "Marcar pagada"} ${debt.title}`}
+          onClick={() => onTogglePaid(debt)}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 text-teal-700 transition hover:bg-slate-50"
+        >
+          <CheckCircle2 size={16} />
+        </button>
         <button
           type="button"
           title="Editar"

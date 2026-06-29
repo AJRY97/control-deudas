@@ -2,6 +2,13 @@ backend/data/*.sqlite
 backend/data/*.sqlite-*
 backend/monthly_details.json
 backend/__pycache__/
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+node_modules/
 frontend/dist
 frontend/node_modules
 frontend/*.tsbuildinfo

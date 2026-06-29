@@ -18,6 +18,7 @@ SEED_PATH = ROOT / "seed_debts.json"
 MONTHLY_DETAILS_PATH = ROOT / "monthly_details.json"
 STATIC_DIR = Path(os.environ.get("DEBT_APP_STATIC", ROOT.parent / "frontend" / "dist"))
 PAYER_MODES = {"alan", "mairon", "ambos", "personalizado"}
+PEOPLE = {"ALAN", "MAIRON"}
 
 
 def month_start(value: str) -> date:
@@ -76,6 +77,20 @@ def init_db() -> None:
                 notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS monthly_payments (
+                month TEXT NOT NULL,
+                person TEXT NOT NULL,
+                paid INTEGER NOT NULL DEFAULT 0,
+                amount INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                paid_at TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (month, person)
             )
             """
         )
@@ -289,6 +304,108 @@ def month_detail(month: str) -> dict:
     }
 
 
+def normalize_person(value: str) -> str:
+    person = str(value).strip().upper()
+    if person not in PEOPLE:
+        raise ValueError("Persona invalida. Usa ALAN o MAIRON.")
+    return person
+
+
+def expected_payment_amount(month: str, person: str) -> int:
+    statement = month_detail(month).get("statement")
+    if statement:
+        for item in statement.get("people", []):
+            if item.get("person") == person:
+                return int(item.get("pay_now") or item.get("settlement_charges") or 0)
+
+    target = month_start(month)
+    amount_key = "alan_monthly" if person == "ALAN" else "mairon_monthly"
+    total = 0
+    for row in fetch_debts():
+        start = month_start(row["start_month"])
+        end = add_months(start, row["installments_total"] - 1)
+        if start <= target <= end:
+            total += row[amount_key]
+    return total
+
+
+def payment_row(month: str, person: str, row: sqlite3.Row | None) -> dict:
+    expected = expected_payment_amount(month, person)
+    if not row:
+        return {
+            "month": month,
+            "person": person,
+            "paid": False,
+            "amount": expected,
+            "expected_amount": expected,
+            "note": "",
+            "paid_at": None,
+            "updated_at": None,
+        }
+
+    return {
+        "month": row["month"],
+        "person": row["person"],
+        "paid": bool(row["paid"]),
+        "amount": (row["amount"] or expected) if row["paid"] else expected,
+        "expected_amount": expected,
+        "note": row["note"],
+        "paid_at": row["paid_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def month_payments(month: str) -> dict:
+    month_start(month)
+    with connect() as conn:
+        rows = {
+            row["person"]: row
+            for row in conn.execute("SELECT * FROM monthly_payments WHERE month = ?", (month,)).fetchall()
+        }
+    people = [payment_row(month, person, rows.get(person)) for person in ("ALAN", "MAIRON")]
+    paid_total = sum(item["amount"] for item in people if item["paid"])
+    expected_total = sum(item["expected_amount"] for item in people)
+    return {
+        "month": month,
+        "people": people,
+        "all_paid": all(item["paid"] for item in people),
+        "paid_total": paid_total,
+        "pending_total": expected_total - paid_total,
+        "expected_total": expected_total,
+    }
+
+
+def update_month_payment(payload: dict) -> dict:
+    month = str(payload.get("month", "")).strip()
+    month_start(month)
+    person = normalize_person(payload.get("person", ""))
+    paid = bool(payload.get("paid"))
+    amount = as_int(payload, "amount", expected_payment_amount(month, person))
+    if amount <= 0:
+        amount = expected_payment_amount(month, person)
+    note = str(payload.get("note", "")).strip()
+    stamp = now_iso()
+    paid_at = stamp if paid else None
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO monthly_payments (
+                month, person, paid, amount, note, paid_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(month, person) DO UPDATE SET
+                paid = excluded.paid,
+                amount = excluded.amount,
+                note = excluded.note,
+                paid_at = excluded.paid_at,
+                updated_at = excluded.updated_at
+            """,
+            (month, person, int(paid), amount, note, paid_at, stamp),
+        )
+    return month_payments(month)
+
+
 def create_debt(payload: dict) -> dict:
     data = normalize_payload(payload)
     stamp = now_iso()
@@ -390,10 +507,25 @@ class DebtHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        if parsed.path == "/api/month-payments":
+            query = parse_qs(parsed.query)
+            month = query.get("month", [current_month_key()])[0]
+            try:
+                self.send_json(month_payments(month))
+            except ValueError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         self.serve_static(parsed.path)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/debts":
+        path = urlparse(self.path).path
+        if path == "/api/month-payments":
+            try:
+                self.send_json(update_month_payment(self.read_json()))
+            except ValueError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        if path != "/api/debts":
             self.send_error_json(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
             return
         try:

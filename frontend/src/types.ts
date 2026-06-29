@@ -16,7 +16,9 @@ export interface DebtPayload {
 }
 
 export interface Debt extends DebtPayload {
-  id: number;
+  id: string;
+  is_paid: boolean;
+  paid_at: string | null;
   end_month: string;
   status: DebtStatus;
   paid_installments_as_of: number;
@@ -112,4 +114,32 @@ export interface MonthlyDetailResponse {
     future: number;
     all: number;
   };
+}
+
+export interface PaymentPersonStatus {
+  month: string;
+  person: "ALAN" | "MAIRON";
+  paid: boolean;
+  amount: number;
+  expected_amount: number;
+  note: string;
+  paid_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MonthPaymentsResponse {
+  month: string;
+  people: PaymentPersonStatus[];
+  all_paid: boolean;
+  paid_total: number;
+  pending_total: number;
+  expected_total: number;
+}
+
+export interface MonthPaymentPayload {
+  month: string;
+  person: "ALAN" | "MAIRON";
+  paid: boolean;
+  amount?: number;
+  note?: string;
 }
