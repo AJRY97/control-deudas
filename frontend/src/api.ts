@@ -31,7 +31,9 @@ type MonthlyPaymentRow = {
 let supabase: SupabaseClient | null = null;
 
 function normalizeSupabaseUrl(value: string) {
-  return value.trim().replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, "");
+  const trimmed = value.trim();
+  const url = trimmed.match(/https?:\/\/\S+/)?.[0] ?? trimmed;
+  return url.replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, "");
 }
 
 function getSupabase() {
