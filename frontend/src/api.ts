@@ -32,19 +32,45 @@ let supabase: SupabaseClient | null = null;
 
 function normalizeSupabaseUrl(value: string) {
   const trimmed = value.trim();
-  const extracted = trimmed.match(/https?:\/\/\S+/)?.[0] ?? trimmed;
-  const withProtocol = extracted.startsWith("http") ? extracted : extracted.replace(/^([\w-]+\.supabase\.co)/, "https://$1");
+  const domainOnly = trimmed.match(/[\w-]+\.supabase\.co\S*/)?.[0];
+  const extracted = trimmed.match(/https?:\/\/\S+/)?.[0] ?? domainOnly ?? trimmed;
+  const withProtocol = domainOnly && !extracted.startsWith("http") ? `https://${extracted}` : extracted;
   return withProtocol.replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, "");
+}
+
+function isHttpUrl(value: string) {
+  return /^https?:\/\/\S+/.test(value);
+}
+
+function extractJwt(value: string) {
+  return value.trim().match(/eyJ[\w-]+\.[\w-]+\.[\w-]+/)?.[0] ?? "";
 }
 
 function getSupabase() {
   if (supabase) return supabase;
 
-  const url = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL ?? "");
-  const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? "").trim();
+  const rawUrl = import.meta.env.VITE_SUPABASE_URL ?? "";
+  const rawAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? "";
+  let url = normalizeSupabaseUrl(rawUrl);
+  let anonKey = extractJwt(rawAnonKey) || rawAnonKey.trim();
+
+  const urlFromKeyField = normalizeSupabaseUrl(rawAnonKey);
+  const keyFromUrlField = extractJwt(rawUrl);
+
+  if (!isHttpUrl(url) && isHttpUrl(urlFromKeyField)) {
+    url = urlFromKeyField;
+  }
+
+  if (!extractJwt(anonKey) && keyFromUrlField) {
+    anonKey = keyFromUrlField;
+  }
 
   if (!url || !anonKey) {
     throw new Error("Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.");
+  }
+
+  if (!isHttpUrl(url)) {
+    throw new Error("VITE_SUPABASE_URL debe ser la Project URL de Supabase, por ejemplo https://tu-proyecto.supabase.co.");
   }
 
   supabase = createClient(url, anonKey);
