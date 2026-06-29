@@ -18,7 +18,17 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { createDebt, deleteDebt, getMonthDetail, getMonthPayments, getSummary, markDebtPaid, updateDebt, updateMonthPayment } from "./api";
+import {
+  createDebt,
+  deleteDebt,
+  getMonthDetail,
+  getMonthPayments,
+  getNextPendingMonth,
+  getSummary,
+  markDebtPaid,
+  updateDebt,
+  updateMonthPayment
+} from "./api";
 import type {
   Debt,
   DebtPayload,
@@ -212,6 +222,27 @@ export default function App() {
   }, [fromMonth, months]);
 
   useEffect(() => {
+    let active = true;
+
+    async function syncInitialPendingMonth() {
+      try {
+        const pendingMonth = await getNextPendingMonth(currentMonth(), 60);
+        if (!active) return;
+        setFromMonth(pendingMonth);
+        setDebtMonth(pendingMonth);
+      } catch {
+        // The regular loaders will surface connection errors in the page.
+      }
+    }
+
+    void syncInitialPendingMonth();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setDebtMonth(fromMonth);
   }, [fromMonth]);
 
@@ -366,15 +397,22 @@ export default function App() {
   async function toggleMonthPayment(person: "ALAN" | "MAIRON", paid: boolean) {
     const currentPayment = person === "ALAN" ? alanPayment : maironPayment;
     const amount = currentPayment?.amount ?? currentPayment?.expected_amount ?? 0;
-    setMonthPayments(
-      await updateMonthPayment({
-        month: debtMonth,
-        person,
-        paid,
-        amount,
-        note: currentPayment?.note || (paid ? `Pago de ${formatMonth(debtMonth)} confirmado.` : "")
-      })
-    );
+    const updatedPayments = await updateMonthPayment({
+      month: debtMonth,
+      person,
+      paid,
+      amount,
+      note: currentPayment?.note || (paid ? `Pago de ${formatMonth(debtMonth)} confirmado.` : "")
+    });
+    setMonthPayments(updatedPayments);
+
+    if (paid) {
+      const pendingMonth = await getNextPendingMonth(debtMonth, 60);
+      if (pendingMonth !== debtMonth) {
+        setFromMonth(pendingMonth);
+        setDebtMonth(pendingMonth);
+      }
+    }
   }
 
   return (

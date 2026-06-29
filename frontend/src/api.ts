@@ -339,6 +339,46 @@ function expectedPaymentAmount(rows: DebtRow[], month: string, person: "ALAN" | 
   }, 0);
 }
 
+export async function getNextPendingMonth(fromMonth: string, months = 60) {
+  const rows = await fetchDebtRows();
+  const start = monthStart(fromMonth);
+  const safeMonths = Math.max(1, Math.min(months, 60));
+  const endMonth = monthKey(addMonths(start, safeMonths - 1));
+  const { data, error } = await getSupabase()
+    .from("monthly_payments")
+    .select("*")
+    .gte("month", fromMonth)
+    .lte("month", endMonth);
+
+  if (error) throw new Error(error.message);
+
+  const paymentsByMonth = ((data ?? []) as MonthlyPaymentRow[]).reduce<Record<string, Partial<Record<"ALAN" | "MAIRON", MonthlyPaymentRow>>>>(
+    (acc, row) => {
+      acc[row.month] = { ...(acc[row.month] ?? {}), [row.person]: row };
+      return acc;
+    },
+    {}
+  );
+
+  for (let offset = 0; offset < safeMonths; offset += 1) {
+    const month = monthKey(addMonths(start, offset));
+    const expectedAlan = expectedPaymentAmount(rows, month, "ALAN");
+    const expectedMairon = expectedPaymentAmount(rows, month, "MAIRON");
+
+    if (expectedAlan <= 0 && expectedMairon <= 0) continue;
+
+    const payments = paymentsByMonth[month] ?? {};
+    const alanSettled = expectedAlan <= 0 || payments.ALAN?.paid === true;
+    const maironSettled = expectedMairon <= 0 || payments.MAIRON?.paid === true;
+
+    if (!alanSettled || !maironSettled) {
+      return month;
+    }
+  }
+
+  return fromMonth;
+}
+
 function normalizePayment(row: MonthlyPaymentRow | undefined, month: string, person: "ALAN" | "MAIRON", expected: number): PaymentPersonStatus {
   if (!row) {
     return {
