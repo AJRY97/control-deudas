@@ -25,6 +25,7 @@ import {
   getMonthPayments,
   getNextPendingMonth,
   getSummary,
+  paymentMonthFromPurchaseDate,
   updateDebt,
   updateMonthPayment
 } from "./api";
@@ -69,6 +70,11 @@ function currentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function currentDateKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
 function formatCurrency(value: number) {
   return currency.format(value || 0);
 }
@@ -91,6 +97,43 @@ function formatMonth(value: string | null) {
   const [year, month] = value.split("-").map(Number);
   const date = new Date(year, month - 1, 1);
   return new Intl.DateTimeFormat("es-CL", { month: "short", year: "numeric" }).format(date);
+}
+
+function monthDate(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  return new Date(year, month - 1, 1);
+}
+
+function addMonthsToKey(value: string, months: number) {
+  const date = monthDate(value);
+  return `${date.getFullYear() + Math.floor((date.getMonth() + months) / 12)}-${String((((date.getMonth() + months) % 12) + 12) % 12 + 1).padStart(2, "0")}`;
+}
+
+function statementMonthFromPaymentMonth(paymentMonth: string) {
+  return addMonthsToKey(paymentMonth, -1);
+}
+
+function formatExpenseMonth(paymentMonth: string) {
+  return `Gastos de ${formatMonth(statementMonthFromPaymentMonth(paymentMonth))}`;
+}
+
+function formatSalaryMonth(paymentMonth: string) {
+  return `Se paga con sueldo de ${formatMonth(paymentMonth)}`;
+}
+
+function formatBillingMonthOption(paymentMonth: string) {
+  return `${formatMonth(statementMonthFromPaymentMonth(paymentMonth))} · sueldo ${formatMonth(paymentMonth)}`;
+}
+
+function billingPeriodLabel(paymentMonth: string) {
+  const statementDate = monthDate(statementMonthFromPaymentMonth(paymentMonth));
+  const from = new Date(statementDate.getFullYear(), statementDate.getMonth() - 1, 26);
+  const to = new Date(statementDate.getFullYear(), statementDate.getMonth(), 25);
+  return `${formatDate(dateKey(from))} - ${formatDate(dateKey(to))}`;
+}
+
+function dateKey(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
 
 function formatDate(value: string | null) {
@@ -130,13 +173,16 @@ function installmentLabel(debt: Debt, month: string) {
 }
 
 function defaultDraft(fromMonth: string): DebtPayload {
+  const purchaseDate = currentDateKey();
+  const paymentMonth = paymentMonthFromPurchaseDate(purchaseDate) || fromMonth;
   return {
     title: "",
     category: "Manual",
+    purchase_date: purchaseDate,
     total_amount: 0,
     monthly_installment: 0,
     installments_total: 1,
-    start_month: fromMonth,
+    start_month: paymentMonth,
     alan_monthly: 0,
     mairon_monthly: 0,
     payer_mode: "ambos",
@@ -163,6 +209,7 @@ function debtToDraft(debt: Debt): DebtPayload {
   return {
     title: debt.title,
     category: debt.category,
+    purchase_date: debt.purchase_date || "",
     total_amount: debt.total_amount,
     monthly_installment: debt.monthly_installment,
     installments_total: debt.installments_total,
@@ -197,6 +244,8 @@ export default function App() {
   const [mobileView, setMobileView] = useState<MobileView>("month");
   const [desktopScope, setDesktopScope] = useState<DesktopScope>("both");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshDone, setRefreshDone] = useState(false);
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
 
@@ -227,6 +276,15 @@ export default function App() {
     } catch {
       setMonthPayments(null);
     }
+  }
+
+  async function refreshAll() {
+    setRefreshing(true);
+    setRefreshDone(false);
+    await Promise.all([load(), loadMonthDetail(debtMonth), loadMonthPayments(debtMonth)]);
+    setRefreshing(false);
+    setRefreshDone(true);
+    window.setTimeout(() => setRefreshDone(false), 900);
   }
 
   useEffect(() => {
@@ -370,7 +428,17 @@ export default function App() {
 
   function updateDraftText(key: keyof DebtPayload, value: string) {
     if (!editor) return;
+    if (key === "purchase_date") {
+      updatePurchaseDate(value);
+      return;
+    }
     updateDraft({ ...editor.draft, [key]: value });
+  }
+
+  function updatePurchaseDate(value: string) {
+    if (!editor) return;
+    const paymentMonth = paymentMonthFromPurchaseDate(value) || editor.draft.start_month;
+    updateDraft({ ...editor.draft, purchase_date: value, start_month: paymentMonth });
   }
 
   function updateDraftNumber(key: keyof DebtPayload, value: string) {
@@ -409,7 +477,7 @@ export default function App() {
       person,
       paid,
       amount,
-      note: currentPayment?.note || (paid ? `Pago de ${formatMonth(debtMonth)} confirmado.` : "")
+      note: currentPayment?.note || (paid ? `${formatExpenseMonth(debtMonth)} confirmados con sueldo de ${formatMonth(debtMonth)}.` : "")
     });
     setMonthPayments(updatedPayments);
 
@@ -456,11 +524,9 @@ export default function App() {
         maironMonthTotal={monthTotals.mairon}
         alanPayment={alanPayment}
         maironPayment={maironPayment}
-        onRefresh={() => {
-          void load();
-          void loadMonthDetail(debtMonth);
-          void loadMonthPayments(debtMonth);
-        }}
+        refreshing={refreshing}
+        refreshDone={refreshDone}
+        onRefresh={() => void refreshAll()}
         onCreate={openCreate}
         onTogglePayment={toggleMonthPayment}
         onEdit={openEdit}
@@ -481,7 +547,7 @@ export default function App() {
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Desde
+              Desde sueldo
               <input
                 type="month"
                 value={fromMonth}
@@ -500,19 +566,7 @@ export default function App() {
                 className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
               />
             </label>
-            <button
-              type="button"
-              onClick={() => {
-                void load();
-                void loadMonthDetail(debtMonth);
-                void loadMonthPayments(debtMonth);
-              }}
-              title="Actualizar"
-              aria-label="Actualizar"
-              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-            >
-              <RefreshCcw size={18} />
-            </button>
+            <RefreshButton refreshing={refreshing} done={refreshDone} onClick={() => void refreshAll()} />
             <button
               type="button"
               onClick={openCreate}
@@ -561,7 +615,7 @@ export default function App() {
             label="Mes más alto"
             value={formatCurrency(summary?.stats.peak_month?.total ?? 0)}
             tone="indigo"
-            detail={formatMonth(summary?.stats.peak_month?.month ?? null)}
+            detail={summary?.stats.peak_month?.month ? formatExpenseMonth(summary.stats.peak_month.month) : "Sin pagos"}
           />
         </section>
 
@@ -592,14 +646,14 @@ export default function App() {
         <section className="flex flex-col gap-4 pb-8">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-slate-950">Deudas del mes</h2>
+              <h2 className="text-xl font-semibold text-slate-950">{formatExpenseMonth(debtMonth)}</h2>
               <p className="text-sm text-slate-500">
-                {loading ? "Cargando..." : `${monthlyPaymentCount} pagos en ${formatMonth(debtMonth)}`}
+                {loading ? "Cargando..." : `${monthlyPaymentCount} pagos · ${formatSalaryMonth(debtMonth)}`}
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                Mes listado
+                Cartola
                 <select
                   value={debtMonth}
                   onChange={(event) => setDebtMonth(event.target.value)}
@@ -607,7 +661,7 @@ export default function App() {
                 >
                   {debtMonthOptions.map((month) => (
                     <option key={month} value={month}>
-                      {formatMonth(month)}
+                      {formatBillingMonthOption(month)}
                     </option>
                   ))}
                 </select>
@@ -633,9 +687,9 @@ export default function App() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <MonthTotal label="Alan en el mes" value={monthTotals.alan} tone="teal" />
-            <MonthTotal label="Mairon en el mes" value={monthTotals.mairon} tone="amber" />
-            <MonthTotal label="Total del mes" value={monthTotals.alan + monthTotals.mairon} tone="slate" />
+            <MonthTotal label="Alan gastos" value={monthTotals.alan} tone="teal" />
+            <MonthTotal label="Mairon gastos" value={monthTotals.mairon} tone="amber" />
+            <MonthTotal label="Total gastos" value={monthTotals.alan + monthTotals.mairon} tone="slate" />
           </div>
 
           <MonthPaymentPanel
@@ -746,15 +800,30 @@ export default function App() {
                   className="input"
                 />
               </Field>
-              <Field label="Mes inicio">
+              <Field label="Fecha compra">
+                <input
+                  type="date"
+                  value={editor.draft.purchase_date}
+                  onInput={(event) => updatePurchaseDate(event.currentTarget.value)}
+                  onChange={(event) => updatePurchaseDate(event.target.value)}
+                  className="input"
+                />
+              </Field>
+              <Field label="Primer pago">
                 <input
                   type="month"
                   value={editor.draft.start_month}
-                  onChange={(event) => updateDraftText("start_month", event.target.value)}
+                  readOnly
                   className="input"
                   required
                 />
               </Field>
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 sm:col-span-2">
+                <span className="font-semibold text-slate-950">{formatExpenseMonth(editor.draft.start_month)}</span>
+                <span className="mx-2 text-slate-400">·</span>
+                <span>{formatSalaryMonth(editor.draft.start_month)}</span>
+                <span className="mt-1 block text-xs text-slate-500">Cartola {billingPeriodLabel(editor.draft.start_month)}</span>
+              </div>
               <Field label="Total deuda">
                 <input
                   type="text"
@@ -887,6 +956,35 @@ function DesktopScopeTabs({ value, onChange }: { value: DesktopScope; onChange: 
   );
 }
 
+function RefreshButton({
+  refreshing,
+  done,
+  onClick,
+  square = false
+}: {
+  refreshing: boolean;
+  done: boolean;
+  onClick: () => void;
+  square?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={refreshing}
+      title="Actualizar"
+      aria-label="Actualizar"
+      className={classNames(
+        "inline-flex h-10 items-center justify-center rounded-md border bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-80",
+        square ? "w-10 px-0" : "px-3",
+        done ? "refresh-done border-teal-300 text-teal-700" : "border-slate-300"
+      )}
+    >
+      <RefreshCcw size={18} className={classNames(refreshing && "animate-spin", done && "refresh-icon-pop")} />
+    </button>
+  );
+}
+
 function DesktopPersonDashboard({
   person,
   personName,
@@ -954,10 +1052,10 @@ function DesktopPersonDashboard({
         />
         <MetricCard
           icon={<CalendarDays size={18} />}
-          label={`${personName} en el mes`}
+          label={`${personName} gastos`}
           value={formatCurrency(monthlyTotal)}
           tone={accent}
-          detail={formatMonth(debtMonth)}
+          detail={formatSalaryMonth(debtMonth)}
         />
         <MetricCard
           icon={<CircleDollarSign size={18} />}
@@ -999,11 +1097,11 @@ function DesktopPersonDashboard({
       <section className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-950">{personName}: detalle del mes</h2>
-            <p className="text-sm text-slate-500">{formatMonth(debtMonth)}</p>
+            <h2 className="text-xl font-semibold text-slate-950">{personName}: {formatExpenseMonth(debtMonth)}</h2>
+            <p className="text-sm text-slate-500">{formatSalaryMonth(debtMonth)}</p>
           </div>
           <label className="flex w-fit flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Mes listado
+            Cartola
             <select
               value={debtMonth}
               onChange={(event) => setDebtMonth(event.target.value)}
@@ -1011,7 +1109,7 @@ function DesktopPersonDashboard({
             >
               {debtMonthOptions.map((month) => (
                 <option key={month} value={month}>
-                  {formatMonth(month)}
+                  {formatBillingMonthOption(month)}
                 </option>
               ))}
             </select>
@@ -1019,7 +1117,7 @@ function DesktopPersonDashboard({
         </div>
 
         <div className="grid gap-3 lg:grid-cols-2">
-          <MonthTotal label={`${personName} en el mes`} value={monthlyTotal} tone={accent} />
+          <MonthTotal label={`${personName} gastos`} value={monthlyTotal} tone={accent} />
           <MonthTotal label={payment?.paid ? "Pago confirmado" : "Pago pendiente"} value={payment?.amount ?? payNow} tone="slate" />
         </div>
 
@@ -1110,6 +1208,8 @@ function MobileShell({
   maironMonthTotal,
   alanPayment,
   maironPayment,
+  refreshing,
+  refreshDone,
   onRefresh,
   onCreate,
   onTogglePayment,
@@ -1152,6 +1252,8 @@ function MobileShell({
   maironMonthTotal: number;
   alanPayment?: PaymentPersonStatus;
   maironPayment?: PaymentPersonStatus;
+  refreshing: boolean;
+  refreshDone: boolean;
   onRefresh: () => void;
   onCreate: () => void;
   onTogglePayment: (person: "ALAN" | "MAIRON", paid: boolean) => Promise<void>;
@@ -1170,15 +1272,7 @@ function MobileShell({
             {mobilePerson ? mobilePersonName : "Alan y Mairon"}
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          title="Actualizar"
-          aria-label="Actualizar"
-          className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50"
-        >
-          <RefreshCcw size={18} />
-        </button>
+        <RefreshButton refreshing={refreshing} done={refreshDone} onClick={onRefresh} square />
       </header>
 
       {error && (
@@ -1232,7 +1326,7 @@ function MobileShell({
 
           <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Desde
+              Desde sueldo
               <input
                 type="month"
                 value={fromMonth}
@@ -1241,7 +1335,7 @@ function MobileShell({
               />
             </label>
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Mes listado
+              Cartola
               <select
                 value={debtMonth}
                 onChange={(event) => setDebtMonth(event.target.value)}
@@ -1249,7 +1343,7 @@ function MobileShell({
               >
                 {debtMonthOptions.map((month) => (
                   <option key={month} value={month}>
-                    {formatMonth(month)}
+                    {formatBillingMonthOption(month)}
                   </option>
                 ))}
               </select>
@@ -1260,7 +1354,7 @@ function MobileShell({
             <MobileViewButton
               active={mobileView === "projection"}
               icon={<ChartNoAxesColumnIncreasing size={17} />}
-              label="Proyeccion"
+              label="Proyección"
               onClick={() => setMobileView("projection")}
             />
             <MobileViewButton
@@ -1418,7 +1512,8 @@ function MobilePersonButton({
           <div className="mt-3 text-xl font-semibold text-slate-950">{name}</div>
         </div>
         <div className="text-right">
-          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Pago {formatMonth(month)}</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{formatExpenseMonth(month)}</div>
+          <div className="mt-0.5 text-xs text-slate-500">Sueldo {formatMonth(month)}</div>
           <div className="mt-1 text-base font-semibold text-slate-950">{formatCurrency(monthTotal)}</div>
           <PaymentBadge paid={payment?.paid ?? false} compact />
         </div>
@@ -1481,7 +1576,7 @@ function MobileProjectionView({
     <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft animate-fade-up">
       <div className="mb-4 flex items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-slate-950">Proyeccion {personName}</h2>
+          <h2 className="text-lg font-semibold text-slate-950">Proyección {personName}</h2>
           <p className="text-sm text-slate-500">{formatCurrency(total)}</p>
         </div>
         <label className="flex w-24 flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
@@ -1519,8 +1614,11 @@ function MobileProjectionRow({
   const width = `${Math.max(0, (amount / max) * 100)}%`;
 
   return (
-    <div className="grid grid-cols-[5.6rem_1fr] items-center gap-3">
-      <div className="text-sm font-semibold capitalize text-slate-700">{formatMonth(item.month)}</div>
+    <div className="grid grid-cols-[6.4rem_1fr] items-center gap-3">
+      <div>
+        <div className="text-sm font-semibold capitalize text-slate-700">{formatMonth(statementMonthFromPaymentMonth(item.month))}</div>
+        <div className="text-[11px] font-medium text-slate-500">Sueldo {formatMonth(item.month)}</div>
+      </div>
       <div className="min-w-0">
         <div className="mb-1 text-right text-sm font-semibold text-slate-950">{formatCurrency(amount)}</div>
         <div className="h-2.5 overflow-hidden rounded-md bg-slate-100">
@@ -1570,7 +1668,11 @@ function MobileMonthView({
 }) {
   return (
     <div className="flex flex-col gap-4 animate-fade-up">
-      <MonthTotal label={`${personName} en el mes`} value={monthlyTotal} tone={accent} />
+      <div>
+        <h2 className="text-lg font-semibold text-slate-950">{formatExpenseMonth(month)}</h2>
+        <p className="text-sm text-slate-500">{formatSalaryMonth(month)}</p>
+      </div>
+      <MonthTotal label={`${personName} gastos`} value={monthlyTotal} tone={accent} />
 
       <PaymentPersonCard
         name={personName}
@@ -1712,7 +1814,8 @@ function MobileControlDebtRow({
           </span>
         </div>
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-          <span>{formatMonth(debt.start_month)} a {formatMonth(debt.end_month)}</span>
+          <span>Sueldo {formatMonth(debt.start_month)} a {formatMonth(debt.end_month)}</span>
+          {debt.purchase_date && <span>Compra {formatDate(debt.purchase_date)}</span>}
           <span>Cuota {formatCurrency(debt[monthlyKey])}</span>
         </div>
       </div>
@@ -1784,8 +1887,11 @@ function ProjectionRow({ item, max }: { item: ProjectionMonth; max: number }) {
   const alanWidth = `${Math.max(0, (item.alan / max) * 100)}%`;
   const maironWidth = `${Math.max(0, (item.mairon / max) * 100)}%`;
   return (
-    <div className="grid grid-cols-[5.8rem_1fr] items-center gap-3 sm:grid-cols-[6.6rem_1fr_8.4rem]">
-      <div className="text-sm font-semibold capitalize text-slate-700">{formatMonth(item.month)}</div>
+    <div className="grid grid-cols-[6.4rem_1fr] items-center gap-3 sm:grid-cols-[8.2rem_1fr_8.4rem]">
+      <div>
+        <div className="text-sm font-semibold capitalize text-slate-700">{formatMonth(statementMonthFromPaymentMonth(item.month))}</div>
+        <div className="text-[11px] font-medium text-slate-500">Sueldo {formatMonth(item.month)}</div>
+      </div>
       <div className="relative h-8 overflow-hidden rounded-md bg-slate-100">
         <div
           className="absolute left-0 top-0 h-full origin-left bg-teal-500/80 animate-bar-grow"
@@ -1895,9 +2001,10 @@ function MonthPaymentPanel({
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.12em] text-teal-700">
             <CircleDollarSign size={17} />
-            Pago del mes
+            Pago con sueldo
           </div>
           <h3 className="mt-1 text-lg font-semibold text-slate-950">{formatMonth(month)}</h3>
+          <p className="text-sm text-slate-500">{formatExpenseMonth(month)}</p>
         </div>
         <span className="inline-flex w-fit rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
           Confirmado {formatCurrency(paidTotal)}
@@ -1977,9 +2084,9 @@ function StatementPanel({ detail }: { detail: MonthlyDetailResponse }) {
     <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft animate-fade-up">
       <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-slate-950">Cartola {statement.label}</h3>
+          <h3 className="text-lg font-semibold text-slate-950">Cartola {formatExpenseMonth(detail.month)}</h3>
           <p className="text-sm text-slate-500">
-            Vence {formatDate(statement.due_date)} - Total cartola {formatCurrency(statement.statement_total_to_pay)}
+            {formatSalaryMonth(detail.month)} · Vence {formatDate(statement.due_date)} · Total cartola {formatCurrency(statement.statement_total_to_pay)}
           </p>
         </div>
         <span className="inline-flex w-fit rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white">
@@ -2102,7 +2209,7 @@ function StatementListPanel({
         <div>
           <h3 className="text-base font-semibold text-slate-950">Lista {name}</h3>
           <p className="text-sm text-slate-500">
-            {currentItems.length} cobran en {formatMonth(month)} - {futureItems.length} futuras
+            {currentItems.length} cobran en {formatExpenseMonth(month).toLowerCase()} - {futureItems.length} futuras
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -2208,7 +2315,7 @@ function DebtListPanel({
         <div>
           <h3 className="text-base font-semibold text-slate-950">Lista {name}</h3>
           <p className="text-sm text-slate-500">
-            {debts.length} pagos · {formatMonth(month)}
+            {debts.length} pagos · {formatExpenseMonth(month).toLowerCase()}
           </p>
         </div>
         <span
@@ -2269,7 +2376,8 @@ function DebtListRow({
           )}
         </div>
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-          <span>{formatMonth(debt.start_month)} a {formatMonth(debt.end_month)}</span>
+          <span>Sueldo {formatMonth(debt.start_month)} a {formatMonth(debt.end_month)}</span>
+          {debt.purchase_date && <span>Compra {formatDate(debt.purchase_date)}</span>}
           <span>Cuota total {formatCurrency(debt.monthly_installment)}</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-md bg-slate-100">

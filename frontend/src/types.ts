@@ -4,6 +4,7 @@ export type DebtStatus = "active" | "finished" | "upcoming";
 export interface DebtPayload {
   title: string;
   category: string;
+  purchase_date: string;
   total_amount: number;
   monthly_installment: number;
   installments_total: number;

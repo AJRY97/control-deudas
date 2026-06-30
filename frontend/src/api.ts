@@ -13,8 +13,9 @@ import type {
   SummaryResponse
 } from "./types";
 
-type DebtRow = DebtPayload & {
+type DebtRow = Omit<DebtPayload, "purchase_date"> & {
   id: string;
+  purchase_date?: string | null;
   is_paid: boolean | null;
   paid_at: string | null;
   created_at: string;
@@ -45,6 +46,14 @@ type PaymentNoteData = {
   items?: MonthlyDetailItem[];
 };
 
+type DebtNoteData = {
+  kind?: "debt-note-v1";
+  text?: string;
+  purchase_date?: string;
+};
+
+type DebtDbPayload = Omit<DebtPayload, "purchase_date">;
+
 let supabase: SupabaseClient | null = null;
 
 function normalizeSupabaseUrl(value: string) {
@@ -71,6 +80,35 @@ function parsePaymentNote(value: string | null | undefined): PaymentNoteData | n
   } catch {
     return null;
   }
+}
+
+function isDateKey(value: string | null | undefined) {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function parseDebtNote(value: string | null | undefined) {
+  if (!value) return { text: "", purchase_date: "" };
+  try {
+    const parsed = JSON.parse(value) as DebtNoteData;
+    if (parsed?.kind === "debt-note-v1") {
+      return {
+        text: parsed.text ?? "",
+        purchase_date: isDateKey(parsed.purchase_date) ? parsed.purchase_date ?? "" : ""
+      };
+    }
+  } catch {
+    // Existing notes are plain text; keep them readable.
+  }
+  return { text: value, purchase_date: "" };
+}
+
+function encodeDebtNote(text: string, purchaseDate: string) {
+  if (!purchaseDate) return text;
+  return JSON.stringify({
+    kind: "debt-note-v1",
+    text,
+    purchase_date: purchaseDate
+  } satisfies DebtNoteData);
 }
 
 function getSupabase() {
@@ -114,8 +152,24 @@ function monthKey(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function dateKey(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
 function addMonths(value: Date, months: number) {
   return new Date(value.getFullYear(), value.getMonth() + months, 1);
+}
+
+export function defaultPurchaseDateFromPaymentMonth(paymentMonth: string) {
+  const paymentStart = monthStart(paymentMonth);
+  return dateKey(new Date(paymentStart.getFullYear(), paymentStart.getMonth() - 2, 26));
+}
+
+export function paymentMonthFromPurchaseDate(purchaseDate: string) {
+  if (!isDateKey(purchaseDate)) return "";
+  const [year, month, day] = purchaseDate.split("-").map(Number);
+  const statementMonth = new Date(year, month - 1 + (day >= 26 ? 1 : 0), 1);
+  return monthKey(addMonths(statementMonth, 1));
 }
 
 function monthDiff(start: Date, end: Date) {
@@ -123,6 +177,8 @@ function monthDiff(start: Date, end: Date) {
 }
 
 function computedDebt(row: DebtRow, asOfMonth: string): Debt {
+  const debtNote = parseDebtNote(row.notes);
+  const purchaseDate = (isDateKey(row.purchase_date) ? row.purchase_date ?? "" : "") || debtNote.purchase_date;
   const start = monthStart(row.start_month);
   const end = addMonths(start, row.installments_total - 1);
   const asOf = monthStart(asOfMonth);
@@ -146,6 +202,8 @@ function computedDebt(row: DebtRow, asOfMonth: string): Debt {
 
   return {
     ...row,
+    notes: debtNote.text,
+    purchase_date: purchaseDate,
     is_paid: isPaid,
     end_month: monthKey(end),
     status,
@@ -156,6 +214,17 @@ function computedDebt(row: DebtRow, asOfMonth: string): Debt {
     alan_remaining: row.alan_monthly * remainingInstallments,
     mairon_remaining: row.mairon_monthly * remainingInstallments,
     people_monthly_total: row.alan_monthly + row.mairon_monthly
+  };
+}
+
+function normalizeDebtPayload(payload: DebtPayload): DebtDbPayload {
+  const purchaseMonth = paymentMonthFromPurchaseDate(payload.purchase_date);
+  const { purchase_date: purchaseDate, ...dbPayload } = payload;
+
+  return {
+    ...dbPayload,
+    start_month: purchaseMonth || payload.start_month,
+    notes: encodeDebtNote(payload.notes, purchaseDate)
   };
 }
 
@@ -462,26 +531,28 @@ export async function updateMonthPayment(payload: MonthPaymentPayload) {
 
 export async function createDebt(payload: DebtPayload) {
   const now = new Date().toISOString();
+  const dbPayload = normalizeDebtPayload(payload);
   const { data, error } = await getSupabase()
     .from("debts")
-    .insert({ ...payload, is_paid: false, paid_at: null, updated_at: now })
+    .insert({ ...dbPayload, is_paid: false, paid_at: null, updated_at: now })
     .select("*")
     .single();
 
   if (error) throw new Error(error.message);
-  return computedDebt(data as DebtRow, payload.start_month);
+  return computedDebt(data as DebtRow, dbPayload.start_month);
 }
 
 export async function updateDebt(id: string, payload: DebtPayload) {
+  const dbPayload = normalizeDebtPayload(payload);
   const { data, error } = await getSupabase()
     .from("debts")
-    .update({ ...payload, updated_at: new Date().toISOString() })
+    .update({ ...dbPayload, updated_at: new Date().toISOString() })
     .eq("id", id)
     .select("*")
     .single();
 
   if (error) throw new Error(error.message);
-  return computedDebt(data as DebtRow, payload.start_month);
+  return computedDebt(data as DebtRow, dbPayload.start_month);
 }
 
 export async function deleteDebt(id: string) {
