@@ -10,11 +10,15 @@
   html {
     background: #070b13;
     color-scheme: dark;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   body {
     min-width: 320px;
+    max-width: 100%;
     margin: 0;
+    overflow-x: hidden;
     background: #070b13;
     color: #e5edf6;
     font-family:
@@ -26,6 +30,11 @@
   body {
     overscroll-behavior: none;
     touch-action: manipulation;
+  }
+
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   button,
@@ -45,7 +54,7 @@
 
 @layer components {
   .input {
-    @apply h-10 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20;
+    @apply h-10 w-full min-w-0 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20;
   }
 }
 

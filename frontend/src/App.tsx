@@ -202,6 +202,12 @@ function serviceInfo(serviceKey: string, title = "") {
   );
 }
 
+function expensePersonLabel(person: ExpensePerson | "BOTH") {
+  if (person === "ALAN") return "Alan";
+  if (person === "MAIRON") return "Mairon";
+  return "ambos";
+}
+
 function formatDate(value: string | null) {
   if (!value) return "Sin fecha";
   const [year, month, day] = value.split("-").map(Number);
@@ -238,12 +244,12 @@ function installmentLabel(debt: Debt, month: string) {
   return `Cuota ${selected - start + 1} de ${debt.installments_total}`;
 }
 
-function defaultDraft(fromMonth: string): DebtPayload {
+function defaultDraft(fromMonth: string, person?: MobilePerson | null): DebtPayload {
   const purchaseDate = currentDateKey();
   const paymentMonth = paymentMonthFromPurchaseDate(purchaseDate) || fromMonth;
-  return {
+  const draft: DebtPayload = {
     title: "",
-    category: "Manual",
+    category: person ? "Tarjeta Cencosud" : "Manual",
     purchase_date: purchaseDate,
     total_amount: 0,
     monthly_installment: 0,
@@ -252,9 +258,11 @@ function defaultDraft(fromMonth: string): DebtPayload {
     alan_monthly: 0,
     mairon_monthly: 0,
     payer_mode: "ambos",
-    source: "Manual",
+    source: person ? "Tarjeta Cencosud" : "Manual",
     notes: ""
   };
+
+  return person ? syncShares(draft, person) : draft;
 }
 
 function defaultExternalDraft(month: string, person: MobilePerson | null, category: ExternalExpenseCategory = "subscriptions"): ExternalExpensePayload {
@@ -529,9 +537,20 @@ export default function App() {
   const desktopStatementPerson = desktopPerson === "alan" ? alanStatement : maironStatement;
   const desktopPayment = desktopPerson === "alan" ? alanPayment : maironPayment;
   const desktopBudget = desktopPerson === "alan" ? alanBudget : maironBudget;
+  const externalEditorExistingItems = externalEditor
+    ? externalMonthItems
+        .filter((item) => {
+          if (item.id === externalEditor.id) return false;
+          if (item.category !== externalEditor.draft.category) return false;
+          if (externalEditor.draft.person === "AMBOS") return item.person === "AMBOS";
+          return personAmount(item, externalEditor.draft.person) > 0;
+        })
+        .slice(0, 4)
+    : [];
 
-  function openCreate() {
-    setEditor({ mode: "create", draft: defaultDraft(fromMonth) });
+  function openCreate(person?: MobilePerson | null) {
+    const scopedPerson = person ?? (desktopScope === "both" ? null : desktopScope);
+    setEditor({ mode: "create", draft: defaultDraft(fromMonth, scopedPerson) });
   }
 
   function openEdit(debt: Debt) {
@@ -703,7 +722,7 @@ export default function App() {
   }
 
   return (
-    <main className="theme-dark min-h-screen bg-[#070b13] text-slate-100">
+    <main className="theme-dark min-h-screen overflow-x-hidden bg-[#070b13] text-slate-100">
       <MobileShell
         loading={loading}
         error={error}
@@ -791,7 +810,7 @@ export default function App() {
             <RefreshButton refreshing={refreshing} done={refreshDone} onClick={() => void refreshAll()} />
             <button
               type="button"
-              onClick={openCreate}
+              onClick={() => openCreate()}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white shadow-soft transition hover:bg-slate-800"
             >
               <Plus size={18} />
@@ -1008,7 +1027,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
           <form
             onSubmit={(event) => void saveDebt(event)}
-            className="max-h-[94vh] w-full overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
+            className="max-h-[94vh] w-full max-w-full overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
           >
             <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
               <div>
@@ -1172,7 +1191,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
           <form
             onSubmit={(event) => void saveExternalExpense(event)}
-            className="max-h-[94vh] w-full overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
+            className="max-h-[94vh] w-full max-w-full overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
           >
             <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
               <div>
@@ -1239,6 +1258,35 @@ export default function App() {
                   <option value="AMBOS">Ambos</option>
                 </select>
               </Field>
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 sm:col-span-2">
+                <div className="font-semibold text-slate-950">
+                  Ya registrados para {expensePersonLabel(externalEditor.draft.person)}
+                </div>
+                {externalEditorExistingItems.length > 0 ? (
+                  <div className="mt-2 grid gap-2">
+                    {externalEditorExistingItems.map((item) => {
+                      const amount =
+                        externalEditor.draft.person === "AMBOS"
+                          ? item.alan_amount + item.mairon_amount
+                          : personAmount(item, externalEditor.draft.person);
+                      const itemService = item.category === "subscriptions" ? serviceInfo(item.service_key, item.title) : categoryInfo(item.category);
+                      return (
+                        <div key={item.id} className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-white px-2 py-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className={classNames("inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md", itemService.tone)}>
+                              {itemService.icon}
+                            </span>
+                            <span className="min-w-0 truncate font-medium text-slate-800">{item.title}</span>
+                          </div>
+                          <span className="shrink-0 font-semibold text-slate-950">{formatCurrency(amount)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs text-slate-500">No hay registros previos en esta categorÃ­a para este responsable.</div>
+                )}
+              </div>
               <Field label="Monto">
                 <input
                   type="text"
@@ -1784,7 +1832,7 @@ function ExternalExpensePanel({
         </div>
         <button
           type="button"
-          onClick={onCreate}
+          onClick={() => onCreate()}
           className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-semibold text-white transition hover:bg-teal-800"
         >
           <Plus size={16} />
@@ -2209,7 +2257,7 @@ function MobileShell({
   refreshing: boolean;
   refreshDone: boolean;
   onRefresh: () => void;
-  onCreate: () => void;
+  onCreate: (person?: MobilePerson | null) => void;
   onSaveIncome: (person: "ALAN" | "MAIRON", amount: number) => void;
   onOpenExternalCreate: (category?: ExternalExpenseCategory) => void;
   onOpenExternalEdit: (expense: ExternalExpense) => void;
@@ -2219,8 +2267,10 @@ function MobileShell({
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
 }) {
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-lg flex-col gap-4 px-4 pb-28 pt-4 lg:hidden">
+    <section className="mx-auto flex min-h-screen w-full max-w-lg flex-col gap-4 overflow-x-hidden px-4 pb-28 pt-4 lg:hidden">
       <header className="flex items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-teal-700">
@@ -2414,16 +2464,136 @@ function MobileShell({
         </>
       )}
 
-      <button
-        type="button"
-        onClick={onCreate}
-        title="Nueva deuda"
-        aria-label="Nueva deuda"
-        className="fixed bottom-5 right-5 z-40 inline-flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-soft transition hover:bg-teal-700"
-      >
-        <Plus size={24} />
-      </button>
+      {mobilePerson && (
+        <>
+          <button
+            type="button"
+            onClick={() => setQuickAddOpen(true)}
+            title={`Agregar registro para ${mobilePersonName}`}
+            aria-label={`Agregar registro para ${mobilePersonName}`}
+            className="fixed bottom-5 right-5 z-40 inline-flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-soft transition hover:bg-teal-700"
+          >
+            <Plus size={24} />
+          </button>
+
+          {quickAddOpen && (
+            <MobileQuickAddSheet
+              person={mobilePerson}
+              personName={mobilePersonName}
+              externalItems={externalMonthItems}
+              onClose={() => setQuickAddOpen(false)}
+              onCardCreate={() => {
+                setQuickAddOpen(false);
+                onCreate(mobilePerson);
+              }}
+              onExternalCreate={(category) => {
+                setQuickAddOpen(false);
+                setSelectedExternalCategory(category);
+                onOpenExternalCreate(category);
+              }}
+            />
+          )}
+        </>
+      )}
     </section>
+  );
+}
+
+function MobileQuickAddSheet({
+  person,
+  personName,
+  externalItems,
+  onClose,
+  onCardCreate,
+  onExternalCreate
+}: {
+  person: MobilePerson;
+  personName: string;
+  externalItems: ExternalExpenseMonthItem[];
+  onClose: () => void;
+  onCardCreate: () => void;
+  onExternalCreate: (category: ExternalExpenseCategory) => void;
+}) {
+  const personKey = person === "alan" ? "ALAN" : "MAIRON";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-slate-950/50 p-0 backdrop-blur-sm">
+      <div className="max-h-[86vh] w-full max-w-full overflow-y-auto rounded-t-lg border border-slate-200 bg-white p-4 shadow-soft animate-fade-up">
+        <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">Agregar para</div>
+            <h2 className="truncate text-xl font-semibold text-slate-950">{personName}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            title="Cerrar"
+            aria-label="Cerrar"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-700 transition hover:bg-slate-50"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="grid gap-3">
+          <button
+            type="button"
+            onClick={onCardCreate}
+            className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-teal-300 hover:bg-slate-100"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-700">
+                <CreditCard size={18} />
+              </span>
+              <div className="min-w-0">
+                <div className="font-semibold text-slate-950">Tarjeta Cencosud</div>
+                <div className="text-sm text-slate-500">Compra en cuotas de la cartola</div>
+              </div>
+            </div>
+            <Plus size={18} className="shrink-0 text-slate-500" />
+          </button>
+
+          {externalCategories.map((category) => {
+            const categoryItems = externalItems.filter((item) => item.category === category.key && personAmount(item, personKey) > 0);
+            const total = categoryItems.reduce((sum, item) => sum + personAmount(item, personKey), 0);
+            return (
+              <button
+                key={category.key}
+                type="button"
+                onClick={() => onExternalCreate(category.key)}
+                className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-teal-300 hover:bg-slate-100"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={classNames(
+                      "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md",
+                      category.tone === "teal"
+                        ? "bg-teal-50 text-teal-700"
+                        : category.tone === "amber"
+                          ? "bg-amber-50 text-amber-700"
+                          : category.tone === "rose"
+                            ? "bg-rose-50 text-rose-700"
+                            : category.tone === "indigo"
+                              ? "bg-indigo-50 text-indigo-700"
+                              : "bg-slate-100 text-slate-700"
+                    )}
+                  >
+                    {category.icon}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-950">{category.label}</div>
+                    <div className="text-sm text-slate-500">
+                      {categoryItems.length ? `${categoryItems.length} activos Â· ${formatCurrency(total)}` : category.description}
+                    </div>
+                  </div>
+                </div>
+                <Plus size={18} className="shrink-0 text-slate-500" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 

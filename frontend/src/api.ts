@@ -117,6 +117,10 @@ function isMissingBudgetTable(error: unknown) {
   );
 }
 
+function budgetTableErrorMessage(error: { message: string }) {
+  return isMissingBudgetTable(error) ? "Falta ejecutar el SQL nuevo para activar sueldo y gastos externos." : error.message;
+}
+
 function isDateKey(value: string | null | undefined) {
   return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 }
@@ -719,7 +723,7 @@ export async function updateMonthlyIncome(payload: MonthlyIncomePayload) {
     .select("*")
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(budgetTableErrorMessage(error));
   return data as MonthlyIncome;
 }
 
@@ -732,7 +736,7 @@ export async function createExternalExpense(payload: ExternalExpensePayload) {
     .select("*")
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(budgetTableErrorMessage(error));
   return data as ExternalExpense;
 }
 
@@ -745,13 +749,13 @@ export async function updateExternalExpense(id: string, payload: ExternalExpense
     .select("*")
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(budgetTableErrorMessage(error));
   return data as ExternalExpense;
 }
 
 export async function deleteExternalExpense(id: string) {
   const { error } = await getSupabase().from("external_expenses").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(budgetTableErrorMessage(error));
   return { ok: true };
 }
 
@@ -770,6 +774,6 @@ export async function updateExternalExpensePayment(payload: ExternalExpensePayme
       { onConflict: "expense_id,month" }
     );
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(budgetTableErrorMessage(error));
   return { ok: true };
 }
