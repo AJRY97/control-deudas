@@ -144,3 +144,67 @@ export interface MonthPaymentPayload {
   amount?: number;
   note?: string;
 }
+
+export type BudgetPerson = "ALAN" | "MAIRON";
+export type ExpensePerson = BudgetPerson | "AMBOS";
+export type ExternalExpenseCategory = "subscriptions" | "home" | "other_cards" | "external_debts" | "other";
+export type ExternalExpenseKind = "recurrent" | "installments" | "single";
+
+export interface MonthlyIncome {
+  month: string;
+  person: BudgetPerson;
+  amount: number;
+  note: string;
+  updated_at: string | null;
+}
+
+export interface ExternalExpensePayload {
+  title: string;
+  category: ExternalExpenseCategory;
+  service_key: string;
+  person: ExpensePerson;
+  amount: number;
+  start_month: string;
+  due_day: number;
+  kind: ExternalExpenseKind;
+  installments_total: number;
+  notes: string;
+}
+
+export interface ExternalExpense extends ExternalExpensePayload {
+  id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalExpenseMonthItem extends ExternalExpense {
+  month: string;
+  paid: boolean;
+  paid_at: string | null;
+  effective_amount: number;
+  alan_amount: number;
+  mairon_amount: number;
+  installment_label: string;
+}
+
+export interface BudgetResponse {
+  month: string;
+  schema_ready: boolean;
+  message: string;
+  incomes: MonthlyIncome[];
+  expenses: ExternalExpense[];
+  month_items: ExternalExpenseMonthItem[];
+}
+
+export interface MonthlyIncomePayload {
+  month: string;
+  person: BudgetPerson;
+  amount: number;
+  note?: string;
+}
+
+export interface ExternalExpensePaymentPayload {
+  expense_id: string;
+  month: string;
+  paid: boolean;
+}

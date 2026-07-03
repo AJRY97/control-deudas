@@ -1,9 +1,17 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type {
+  BudgetPerson,
+  BudgetResponse,
   Debt,
   DebtPayload,
+  ExternalExpense,
+  ExternalExpenseMonthItem,
+  ExternalExpensePaymentPayload,
+  ExternalExpensePayload,
   MonthPaymentPayload,
   MonthPaymentsResponse,
+  MonthlyIncome,
+  MonthlyIncomePayload,
   MonthlyDetailItem,
   MonthlyDetailResponse,
   MonthlyStatement,
@@ -28,6 +36,20 @@ type MonthlyPaymentRow = {
   paid: boolean;
   amount: number;
   note: string;
+  paid_at: string | null;
+  updated_at: string | null;
+};
+
+type ExternalExpenseRow = ExternalExpensePayload & {
+  id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ExternalExpensePaymentRow = {
+  expense_id: string;
+  month: string;
+  paid: boolean;
   paid_at: string | null;
   updated_at: string | null;
 };
@@ -80,6 +102,19 @@ function parsePaymentNote(value: string | null | undefined): PaymentNoteData | n
   } catch {
     return null;
   }
+}
+
+function isMissingBudgetTable(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string };
+  const message = candidate.message?.toLowerCase() ?? "";
+  return (
+    candidate.code === "42P01" ||
+    candidate.code === "PGRST205" ||
+    message.includes("does not exist") ||
+    message.includes("could not find the table") ||
+    message.includes("schema cache")
+  );
 }
 
 function isDateKey(value: string | null | undefined) {
@@ -557,6 +592,184 @@ export async function updateDebt(id: string, payload: DebtPayload) {
 
 export async function deleteDebt(id: string) {
   const { error } = await getSupabase().from("debts").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+  return { ok: true };
+}
+
+function normalizeExternalExpense(payload: ExternalExpensePayload): ExternalExpensePayload {
+  return {
+    ...payload,
+    title: payload.title.trim(),
+    service_key: payload.service_key.trim().toLowerCase(),
+    amount: Math.max(0, Math.round(payload.amount || 0)),
+    due_day: Math.max(1, Math.min(31, Math.round(payload.due_day || 1))),
+    installments_total: payload.kind === "installments" ? Math.max(1, Math.round(payload.installments_total || 1)) : 1,
+    notes: payload.notes ?? ""
+  };
+}
+
+function externalExpenseInMonth(expense: ExternalExpenseRow, month: string) {
+  const diff = monthDiff(monthStart(expense.start_month), monthStart(month));
+  if (diff < 0) return false;
+  if (expense.kind === "single") return diff === 0;
+  if (expense.kind === "installments") return diff < expense.installments_total;
+  return true;
+}
+
+function externalInstallmentLabel(expense: ExternalExpenseRow, month: string) {
+  const diff = monthDiff(monthStart(expense.start_month), monthStart(month));
+  if (expense.kind === "installments") return `Cuota ${diff + 1} de ${expense.installments_total}`;
+  if (expense.kind === "single") return "Pago único";
+  return "Mensual";
+}
+
+function buildExternalMonthItem(
+  expense: ExternalExpenseRow,
+  month: string,
+  payment: ExternalExpensePaymentRow | undefined
+): ExternalExpenseMonthItem {
+  const half = Math.round(expense.amount / 2);
+  return {
+    ...expense,
+    month,
+    paid: payment?.paid ?? false,
+    paid_at: payment?.paid_at ?? null,
+    effective_amount: expense.amount,
+    alan_amount: expense.person === "ALAN" ? expense.amount : expense.person === "AMBOS" ? half : 0,
+    mairon_amount: expense.person === "MAIRON" ? expense.amount : expense.person === "AMBOS" ? expense.amount - half : 0,
+    installment_label: externalInstallmentLabel(expense, month)
+  };
+}
+
+export async function getBudget(month: string): Promise<BudgetResponse> {
+  monthStart(month);
+  const expensesResult = await getSupabase()
+    .from("external_expenses")
+    .select("*")
+    .order("category", { ascending: true })
+    .order("title", { ascending: true });
+
+  if (expensesResult.error) {
+    if (isMissingBudgetTable(expensesResult.error)) {
+      return {
+        month,
+        schema_ready: false,
+        message: "Falta ejecutar el SQL nuevo para activar sueldo y gastos externos.",
+        incomes: [],
+        expenses: [],
+        month_items: []
+      };
+    }
+    throw new Error(expensesResult.error.message);
+  }
+
+  const [incomeResult, paymentsResult] = await Promise.all([
+    getSupabase().from("monthly_incomes").select("*").eq("month", month),
+    getSupabase().from("external_expense_payments").select("*").eq("month", month)
+  ]);
+
+  const missingResult = incomeResult.error ?? paymentsResult.error;
+  if (missingResult) {
+    if (isMissingBudgetTable(missingResult)) {
+      return {
+        month,
+        schema_ready: false,
+        message: "Falta ejecutar el SQL nuevo para activar sueldo y gastos externos.",
+        incomes: [],
+        expenses: [],
+        month_items: []
+      };
+    }
+    throw new Error(missingResult.message);
+  }
+
+  const expenses = (expensesResult.data ?? []) as ExternalExpenseRow[];
+  const payments = ((paymentsResult.data ?? []) as ExternalExpensePaymentRow[]).reduce<Record<string, ExternalExpensePaymentRow>>((acc, row) => {
+    acc[row.expense_id] = row;
+    return acc;
+  }, {});
+
+  return {
+    month,
+    schema_ready: true,
+    message: "",
+    incomes: (incomeResult.data ?? []) as MonthlyIncome[],
+    expenses,
+    month_items: expenses
+      .filter((expense) => externalExpenseInMonth(expense, month))
+      .map((expense) => buildExternalMonthItem(expense, month, payments[expense.id]))
+  };
+}
+
+export async function updateMonthlyIncome(payload: MonthlyIncomePayload) {
+  monthStart(payload.month);
+  const now = new Date().toISOString();
+  const { data, error } = await getSupabase()
+    .from("monthly_incomes")
+    .upsert(
+      {
+        month: payload.month,
+        person: payload.person,
+        amount: Math.max(0, Math.round(payload.amount || 0)),
+        note: payload.note ?? "",
+        updated_at: now
+      },
+      { onConflict: "month,person" }
+    )
+    .select("*")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as MonthlyIncome;
+}
+
+export async function createExternalExpense(payload: ExternalExpensePayload) {
+  monthStart(payload.start_month);
+  const now = new Date().toISOString();
+  const { data, error } = await getSupabase()
+    .from("external_expenses")
+    .insert({ ...normalizeExternalExpense(payload), created_at: now, updated_at: now })
+    .select("*")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as ExternalExpense;
+}
+
+export async function updateExternalExpense(id: string, payload: ExternalExpensePayload) {
+  monthStart(payload.start_month);
+  const { data, error } = await getSupabase()
+    .from("external_expenses")
+    .update({ ...normalizeExternalExpense(payload), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as ExternalExpense;
+}
+
+export async function deleteExternalExpense(id: string) {
+  const { error } = await getSupabase().from("external_expenses").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+  return { ok: true };
+}
+
+export async function updateExternalExpensePayment(payload: ExternalExpensePaymentPayload) {
+  const now = new Date().toISOString();
+  const { error } = await getSupabase()
+    .from("external_expense_payments")
+    .upsert(
+      {
+        expense_id: payload.expense_id,
+        month: payload.month,
+        paid: payload.paid,
+        paid_at: payload.paid ? now : null,
+        updated_at: now
+      },
+      { onConflict: "expense_id,month" }
+    );
+
   if (error) throw new Error(error.message);
   return { ok: true };
 }
