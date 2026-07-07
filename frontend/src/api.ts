@@ -5,6 +5,8 @@ import type {
   Debt,
   DebtPayload,
   ExternalExpense,
+  ExternalCategoryPaymentPayload,
+  ExternalCategoryPaymentStatus,
   ExternalExpenseMonthItem,
   ExternalExpensePaymentPayload,
   ExternalExpensePayload,
@@ -50,6 +52,18 @@ type ExternalExpensePaymentRow = {
   expense_id: string;
   month: string;
   paid: boolean;
+  paid_at: string | null;
+  updated_at: string | null;
+};
+
+type ExternalCategoryPaymentRow = {
+  month: string;
+  person: BudgetPerson;
+  category_key: string;
+  category_label: string;
+  paid: boolean;
+  amount: number;
+  note: string;
   paid_at: string | null;
   updated_at: string | null;
 };
@@ -193,6 +207,21 @@ function monthKey(value: Date) {
 
 function dateKey(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function slugText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function externalCategoryKey(expense: Pick<ExternalExpenseRow, "category" | "category_name">) {
+  if (expense.category === "subscriptions" || expense.category === "home") return expense.category;
+  return `custom:${slugText(expense.category_name) || "sin-categoria"}`;
 }
 
 function addMonths(value: Date, months: number) {
@@ -448,38 +477,45 @@ function expectedPaymentAmount(rows: DebtRow[], month: string, person: "ALAN" | 
 }
 
 export async function getNextPendingMonth(fromMonth: string, months = 60) {
-  const rows = await fetchDebtRows();
+  const [rows, externalRows] = await Promise.all([fetchDebtRows(), fetchExternalRowsForPending()]);
   const start = monthStart(fromMonth);
   const safeMonths = Math.max(1, Math.min(months, 60));
   const endMonth = monthKey(addMonths(start, safeMonths - 1));
-  const { data, error } = await getSupabase()
-    .from("monthly_payments")
-    .select("*")
-    .gte("month", fromMonth)
-    .lte("month", endMonth);
+  const [monthlyPaymentsResult, categoryPayments] = await Promise.all([
+    getSupabase().from("monthly_payments").select("*").gte("month", fromMonth).lte("month", endMonth),
+    fetchExternalCategoryPaymentRowsForPending(fromMonth, endMonth)
+  ]);
 
-  if (error) throw new Error(error.message);
+  if (monthlyPaymentsResult.error) throw new Error(monthlyPaymentsResult.error.message);
 
-  const paymentsByMonth = ((data ?? []) as MonthlyPaymentRow[]).reduce<Record<string, Partial<Record<"ALAN" | "MAIRON", MonthlyPaymentRow>>>>(
-    (acc, row) => {
-      acc[row.month] = { ...(acc[row.month] ?? {}), [row.person]: row };
-      return acc;
-    },
-    {}
-  );
+  const paymentsByMonth = ((monthlyPaymentsResult.data ?? []) as MonthlyPaymentRow[]).reduce<
+    Record<string, Partial<Record<"ALAN" | "MAIRON", MonthlyPaymentRow>>>
+  >((acc, row) => {
+    acc[row.month] = { ...(acc[row.month] ?? {}), [row.person]: row };
+    return acc;
+  }, {});
+  const categoryPaymentsByMonth = categoryPayments.reduce<Record<string, Record<string, boolean>>>((acc, row) => {
+    acc[row.month] = acc[row.month] ?? {};
+    acc[row.month][`${row.person}|${row.category_key}`] = row.paid;
+    return acc;
+  }, {});
 
   for (let offset = 0; offset < safeMonths; offset += 1) {
     const month = monthKey(addMonths(start, offset));
     const expectedAlan = expectedPaymentAmount(rows, month, "ALAN");
     const expectedMairon = expectedPaymentAmount(rows, month, "MAIRON");
+    const expectedExternal = expectedExternalCategoryAmounts(externalRows, month);
 
-    if (expectedAlan <= 0 && expectedMairon <= 0) continue;
+    if (expectedAlan <= 0 && expectedMairon <= 0 && expectedExternal.length === 0) continue;
 
     const payments = paymentsByMonth[month] ?? {};
     const alanSettled = expectedAlan <= 0 || payments.ALAN?.paid === true;
     const maironSettled = expectedMairon <= 0 || payments.MAIRON?.paid === true;
+    const externalSettled = expectedExternal.every(
+      (item) => categoryPaymentsByMonth[month]?.[`${item.person}|${item.category_key}`] === true
+    );
 
-    if (!alanSettled || !maironSettled) {
+    if (!alanSettled || !maironSettled || !externalSettled) {
       return month;
     }
   }
@@ -601,13 +637,20 @@ export async function deleteDebt(id: string) {
 }
 
 function normalizeExternalExpense(payload: ExternalExpensePayload): ExternalExpensePayload {
+  const normalizedCategory =
+    payload.category === "subscriptions" || payload.category === "home" || payload.category === "custom" ? payload.category : "custom";
+  const normalizedKind = normalizedCategory === "custom" ? "installments" : payload.kind;
+
   return {
     ...payload,
     title: payload.title.trim(),
+    category: normalizedCategory,
+    category_name: payload.category_name.trim(),
     service_key: payload.service_key.trim().toLowerCase(),
     amount: Math.max(0, Math.round(payload.amount || 0)),
     due_day: Math.max(1, Math.min(31, Math.round(payload.due_day || 1))),
-    installments_total: payload.kind === "installments" ? Math.max(1, Math.round(payload.installments_total || 1)) : 1,
+    kind: normalizedKind,
+    installments_total: normalizedKind === "installments" ? Math.max(1, Math.round(payload.installments_total || 1)) : 1,
     notes: payload.notes ?? ""
   };
 }
@@ -627,22 +670,85 @@ function externalInstallmentLabel(expense: ExternalExpenseRow, month: string) {
   return "Mensual";
 }
 
+function externalMonthAmount(expense: ExternalExpenseRow, month: string) {
+  if (expense.kind !== "installments") return expense.amount;
+  const diff = monthDiff(monthStart(expense.start_month), monthStart(month));
+  const installments = Math.max(1, expense.installments_total);
+  const regularAmount = Math.round(expense.amount / installments);
+  return diff === installments - 1 ? expense.amount - regularAmount * (installments - 1) : regularAmount;
+}
+
 function buildExternalMonthItem(
   expense: ExternalExpenseRow,
   month: string,
   payment: ExternalExpensePaymentRow | undefined
 ): ExternalExpenseMonthItem {
-  const half = Math.round(expense.amount / 2);
+  const effectiveAmount = externalMonthAmount(expense, month);
+  const half = Math.round(effectiveAmount / 2);
   return {
     ...expense,
     month,
     paid: payment?.paid ?? false,
     paid_at: payment?.paid_at ?? null,
-    effective_amount: expense.amount,
-    alan_amount: expense.person === "ALAN" ? expense.amount : expense.person === "AMBOS" ? half : 0,
-    mairon_amount: expense.person === "MAIRON" ? expense.amount : expense.person === "AMBOS" ? expense.amount - half : 0,
+    effective_amount: effectiveAmount,
+    alan_amount: expense.person === "ALAN" ? effectiveAmount : expense.person === "AMBOS" ? half : 0,
+    mairon_amount: expense.person === "MAIRON" ? effectiveAmount : expense.person === "AMBOS" ? effectiveAmount - half : 0,
     installment_label: externalInstallmentLabel(expense, month)
   };
+}
+
+async function fetchExternalRowsForPending() {
+  const { data, error } = await getSupabase().from("external_expenses").select("*");
+  if (error) {
+    if (isMissingBudgetTable(error)) return [];
+    throw new Error(error.message);
+  }
+  return (data ?? []) as ExternalExpenseRow[];
+}
+
+async function fetchExternalCategoryPaymentRowsForPending(fromMonth: string, endMonth: string) {
+  const { data, error } = await getSupabase()
+    .from("external_category_payments")
+    .select("*")
+    .gte("month", fromMonth)
+    .lte("month", endMonth);
+
+  if (error) {
+    if (isMissingBudgetTable(error)) return [];
+    throw new Error(error.message);
+  }
+
+  return (data ?? []) as ExternalCategoryPaymentRow[];
+}
+
+function expectedExternalCategoryAmounts(expenses: ExternalExpenseRow[], month: string) {
+  const totals = new Map<string, { person: BudgetPerson; category_key: string; amount: number }>();
+
+  for (const expense of expenses) {
+    if (!externalExpenseInMonth(expense, month)) continue;
+    const amount = externalMonthAmount(expense, month);
+    if (amount <= 0) continue;
+
+    const categoryKey = externalCategoryKey(expense);
+    const half = Math.round(amount / 2);
+    const amounts =
+      expense.person === "AMBOS"
+        ? [
+            { person: "ALAN" as const, amount: half },
+            { person: "MAIRON" as const, amount: amount - half }
+          ]
+        : [{ person: expense.person, amount }];
+
+    for (const item of amounts) {
+      if (item.amount <= 0) continue;
+      const key = `${item.person}|${categoryKey}`;
+      const current = totals.get(key) ?? { person: item.person, category_key: categoryKey, amount: 0 };
+      current.amount += item.amount;
+      totals.set(key, current);
+    }
+  }
+
+  return Array.from(totals.values());
 }
 
 export async function getBudget(month: string): Promise<BudgetResponse> {
@@ -661,18 +767,20 @@ export async function getBudget(month: string): Promise<BudgetResponse> {
         message: "Falta ejecutar el SQL nuevo para activar sueldo y gastos externos.",
         incomes: [],
         expenses: [],
-        month_items: []
+        month_items: [],
+        category_payments: []
       };
     }
     throw new Error(expensesResult.error.message);
   }
 
-  const [incomeResult, paymentsResult] = await Promise.all([
+  const [incomeResult, paymentsResult, categoryPaymentsResult] = await Promise.all([
     getSupabase().from("monthly_incomes").select("*").eq("month", month),
-    getSupabase().from("external_expense_payments").select("*").eq("month", month)
+    getSupabase().from("external_expense_payments").select("*").eq("month", month),
+    getSupabase().from("external_category_payments").select("*").eq("month", month)
   ]);
 
-  const missingResult = incomeResult.error ?? paymentsResult.error;
+  const missingResult = incomeResult.error ?? paymentsResult.error ?? categoryPaymentsResult.error;
   if (missingResult) {
     if (isMissingBudgetTable(missingResult)) {
       return {
@@ -681,7 +789,8 @@ export async function getBudget(month: string): Promise<BudgetResponse> {
         message: "Falta ejecutar el SQL nuevo para activar sueldo y gastos externos.",
         incomes: [],
         expenses: [],
-        month_items: []
+        month_items: [],
+        category_payments: []
       };
     }
     throw new Error(missingResult.message);
@@ -701,7 +810,8 @@ export async function getBudget(month: string): Promise<BudgetResponse> {
     expenses,
     month_items: expenses
       .filter((expense) => externalExpenseInMonth(expense, month))
-      .map((expense) => buildExternalMonthItem(expense, month, payments[expense.id]))
+      .map((expense) => buildExternalMonthItem(expense, month, payments[expense.id])),
+    category_payments: (categoryPaymentsResult.data ?? []) as ExternalCategoryPaymentStatus[]
   };
 }
 
@@ -776,4 +886,29 @@ export async function updateExternalExpensePayment(payload: ExternalExpensePayme
 
   if (error) throw new Error(budgetTableErrorMessage(error));
   return { ok: true };
+}
+
+export async function updateExternalCategoryPayment(payload: ExternalCategoryPaymentPayload) {
+  const now = new Date().toISOString();
+  const { data, error } = await getSupabase()
+    .from("external_category_payments")
+    .upsert(
+      {
+        month: payload.month,
+        person: payload.person,
+        category_key: payload.category_key,
+        category_label: payload.category_label,
+        paid: payload.paid,
+        amount: Math.max(0, Math.round(payload.amount || 0)),
+        note: payload.note ?? "",
+        paid_at: payload.paid ? now : null,
+        updated_at: now
+      },
+      { onConflict: "month,person,category_key" }
+    )
+    .select("*")
+    .single();
+
+  if (error) throw new Error(budgetTableErrorMessage(error));
+  return data as ExternalCategoryPaymentStatus;
 }

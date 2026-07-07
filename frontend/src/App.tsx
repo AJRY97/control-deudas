@@ -17,7 +17,6 @@ import {
   Plus,
   RefreshCcw,
   Repeat2,
-  ReceiptText,
   Save,
   Trash2,
   UserRound,
@@ -36,8 +35,8 @@ import {
   paymentMonthFromPurchaseDate,
   createExternalExpense,
   deleteExternalExpense,
+  updateExternalCategoryPayment,
   updateExternalExpense,
-  updateExternalExpensePayment,
   updateDebt,
   updateMonthPayment,
   updateMonthlyIncome
@@ -47,6 +46,7 @@ import type {
   BudgetResponse,
   Debt,
   DebtPayload,
+  ExternalCategoryPaymentStatus,
   ExternalExpense,
   ExternalExpenseCategory,
   ExternalExpenseKind,
@@ -66,6 +66,21 @@ type FilterKey = "todos" | "alan" | "mairon" | "compartidas";
 type MobilePerson = "alan" | "mairon";
 type MobileView = "budget" | "projection" | "month" | "control" | "external";
 type DesktopScope = MobilePerson | "both";
+type BudgetCategoryTone = "teal" | "amber" | "rose" | "indigo" | "slate";
+
+interface BudgetCategorySummary {
+  key: string;
+  category: ExternalExpenseCategory;
+  label: string;
+  description: string;
+  amount: number;
+  count: number;
+  icon: ReactNode;
+  tone: BudgetCategoryTone;
+  items: ExternalExpenseMonthItem[];
+  payment?: ExternalCategoryPaymentStatus;
+  paid: boolean;
+}
 
 interface EditorState {
   mode: "create" | "edit";
@@ -97,13 +112,11 @@ const externalCategories: Array<{
   label: string;
   description: string;
   icon: ReactNode;
-  tone: "teal" | "amber" | "rose" | "indigo" | "slate";
+  tone: BudgetCategoryTone;
 }> = [
   { key: "subscriptions", label: "Suscripciones", description: "Apps y servicios", icon: <Repeat2 size={18} />, tone: "teal" },
   { key: "home", label: "Hogar", description: "Internet, luz, agua", icon: <Home size={18} />, tone: "amber" },
-  { key: "other_cards", label: "Otras tarjetas", description: "Pagos fuera de Cencosud", icon: <CreditCard size={18} />, tone: "indigo" },
-  { key: "external_debts", label: "Deudas externas", description: "Cuotas directas", icon: <ReceiptText size={18} />, tone: "rose" },
-  { key: "other", label: "Otros gastos", description: "Bolsillo y varios", icon: <MoreHorizontal size={18} />, tone: "slate" }
+  { key: "custom", label: "Otros gastos", description: "Crea una categoria propia", icon: <MoreHorizontal size={18} />, tone: "slate" }
 ];
 
 const subscriptionServices: Array<{ key: string; label: string; icon: ReactNode; tone: string }> = [
@@ -190,6 +203,43 @@ function categoryInfo(category: ExternalExpenseCategory) {
   return externalCategories.find((item) => item.key === category) ?? externalCategories[externalCategories.length - 1];
 }
 
+function normalizeExternalCategory(category: ExternalExpenseCategory) {
+  return category === "subscriptions" || category === "home" ? category : "custom";
+}
+
+function slugText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function externalCategoryLabel(item: Pick<ExternalExpenseMonthItem | ExternalExpensePayload, "category" | "category_name">) {
+  if (item.category === "subscriptions") return "Suscripciones";
+  if (item.category === "home") return "Hogar";
+  return item.category_name.trim() || "Otros gastos";
+}
+
+function externalCategoryKey(item: Pick<ExternalExpenseMonthItem | ExternalExpensePayload, "category" | "category_name">) {
+  if (item.category === "subscriptions" || item.category === "home") return item.category;
+  return `custom:${slugText(item.category_name) || "sin-categoria"}`;
+}
+
+function externalCategoryTone(category: ExternalExpenseCategory, index = 0): BudgetCategoryTone {
+  if (category === "subscriptions") return "teal";
+  if (category === "home") return "amber";
+  return (["indigo", "rose", "slate", "teal", "amber"] as BudgetCategoryTone[])[index % 5];
+}
+
+function externalCategoryIcon(category: ExternalExpenseCategory) {
+  if (category === "subscriptions") return <Repeat2 size={18} />;
+  if (category === "home") return <Home size={18} />;
+  return <MoreHorizontal size={18} />;
+}
+
 function serviceInfo(serviceKey: string, title = "") {
   const normalized = `${serviceKey} ${title}`.toLowerCase();
   return (
@@ -244,6 +294,31 @@ function installmentLabel(debt: Debt, month: string) {
   return `Cuota ${selected - start + 1} de ${debt.installments_total}`;
 }
 
+function externalExpenseIsActiveInMonth(expense: ExternalExpense, month: string) {
+  const diff = monthNumber(month) - monthNumber(expense.start_month);
+  if (diff < 0) return false;
+  if (expense.kind === "single") return diff === 0;
+  if (expense.kind === "installments") return diff < expense.installments_total;
+  return true;
+}
+
+function externalExpenseMonthAmount(expense: ExternalExpense, month: string) {
+  if (!externalExpenseIsActiveInMonth(expense, month)) return 0;
+  if (expense.kind !== "installments") return expense.amount;
+  const diff = monthNumber(month) - monthNumber(expense.start_month);
+  const installments = Math.max(1, expense.installments_total);
+  const regularAmount = Math.round(expense.amount / installments);
+  return diff === installments - 1 ? expense.amount - regularAmount * (installments - 1) : regularAmount;
+}
+
+function externalExpensePersonAmount(expense: ExternalExpense, person: "ALAN" | "MAIRON", month: string) {
+  const amount = externalExpenseMonthAmount(expense, month);
+  if (expense.person === person) return amount;
+  if (expense.person !== "AMBOS") return 0;
+  const half = Math.round(amount / 2);
+  return person === "ALAN" ? half : amount - half;
+}
+
 function defaultDraft(fromMonth: string, person?: MobilePerson | null): DebtPayload {
   const purchaseDate = currentDateKey();
   const paymentMonth = paymentMonthFromPurchaseDate(purchaseDate) || fromMonth;
@@ -266,30 +341,34 @@ function defaultDraft(fromMonth: string, person?: MobilePerson | null): DebtPayl
 }
 
 function defaultExternalDraft(month: string, person: MobilePerson | null, category: ExternalExpenseCategory = "subscriptions"): ExternalExpensePayload {
+  const normalizedCategory = normalizeExternalCategory(category);
   return {
     title: "",
-    category,
+    category: normalizedCategory,
+    category_name: "",
     service_key: "",
     person: person === "alan" ? "ALAN" : person === "mairon" ? "MAIRON" : "AMBOS",
     amount: 0,
     start_month: month,
     due_day: 1,
-    kind: "recurrent",
+    kind: normalizedCategory === "custom" ? "installments" : "recurrent",
     installments_total: 1,
     notes: ""
   };
 }
 
 function externalToDraft(expense: ExternalExpense): ExternalExpensePayload {
+  const normalizedCategory = normalizeExternalCategory(expense.category);
   return {
     title: expense.title,
-    category: expense.category,
+    category: normalizedCategory,
+    category_name: normalizedCategory === "custom" ? expense.category_name : "",
     service_key: expense.service_key,
     person: expense.person,
     amount: expense.amount,
     start_month: expense.start_month,
     due_day: expense.due_day,
-    kind: expense.kind,
+    kind: normalizedCategory === "custom" ? "installments" : expense.kind,
     installments_total: expense.installments_total,
     notes: expense.notes
   };
@@ -349,6 +428,7 @@ export default function App() {
   const [mobileView, setMobileView] = useState<MobileView>("budget");
   const [desktopScope, setDesktopScope] = useState<DesktopScope>("both");
   const [selectedExternalCategory, setSelectedExternalCategory] = useState<ExternalExpenseCategory>("subscriptions");
+  const [selectedBudgetCategoryKey, setSelectedBudgetCategoryKey] = useState("subscriptions");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshDone, setRefreshDone] = useState(false);
@@ -395,7 +475,8 @@ export default function App() {
         message: err instanceof Error ? err.message : "No se pudo cargar sueldo y gastos externos.",
         incomes: [],
         expenses: [],
-        month_items: []
+        month_items: [],
+        category_payments: []
       });
     }
   }
@@ -456,7 +537,6 @@ export default function App() {
     return monthlyDebts;
   }, [monthlyDebts, filter]);
 
-  const maxProjection = Math.max(1, ...(summary?.projection.map((item) => item.total) ?? [1]));
   const alanDebts = summary?.debts.filter((debt) => debt.alan_monthly > 0) ?? [];
   const maironDebts = summary?.debts.filter((debt) => debt.mairon_monthly > 0) ?? [];
   const alanMonthDebts = debts.filter((debt) => debt.alan_monthly > 0);
@@ -507,11 +587,46 @@ export default function App() {
   const mobilePayment = mobilePerson === "alan" ? alanPayment : maironPayment;
   const selectedBudget = budget?.month === debtMonth ? budget : null;
   const externalMonthItems = selectedBudget?.month_items ?? [];
+  const externalCategoryPayments = selectedBudget?.category_payments ?? [];
+  const combinedProjection = useMemo(() => {
+    const projection = summary?.projection ?? [];
+    const expenses = selectedBudget?.expenses ?? [];
+
+    return projection.map((item) => {
+      const alanExternal = expenses.reduce((sum, expense) => sum + externalExpensePersonAmount(expense, "ALAN", item.month), 0);
+      const maironExternal = expenses.reduce((sum, expense) => sum + externalExpensePersonAmount(expense, "MAIRON", item.month), 0);
+      const externalActive = expenses.filter((expense) => externalExpenseMonthAmount(expense, item.month) > 0).length;
+
+      return {
+        ...item,
+        alan: item.alan + alanExternal,
+        mairon: item.mairon + maironExternal,
+        total: item.total + alanExternal + maironExternal,
+        active_debts: item.active_debts + externalActive
+      };
+    });
+  }, [summary?.projection, selectedBudget?.expenses]);
+  const combinedStats = useMemo(() => {
+    const peakMonth = combinedProjection.reduce<ProjectionMonth | null>((peak, item) => {
+      if (!peak || item.total > peak.total) return item;
+      return peak;
+    }, null);
+
+    return {
+      alan_projected: combinedProjection.reduce((sum, item) => sum + item.alan, 0),
+      mairon_projected: combinedProjection.reduce((sum, item) => sum + item.mairon, 0),
+      total_projected: combinedProjection.reduce((sum, item) => sum + item.total, 0),
+      peak_month: peakMonth
+    };
+  }, [combinedProjection]);
+  const maxProjection = Math.max(1, ...(combinedProjection.map((item) => item.total) ?? [1]));
   const incomeFor = (person: "ALAN" | "MAIRON") => selectedBudget?.incomes.find((item) => item.person === person)?.amount ?? 0;
   const externalFor = (person: "ALAN" | "MAIRON") =>
     externalMonthItems.reduce((sum, item) => sum + (person === "ALAN" ? item.alan_amount : item.mairon_amount), 0);
   const paidExternalFor = (person: "ALAN" | "MAIRON") =>
-    externalMonthItems.reduce((sum, item) => sum + (item.paid ? (person === "ALAN" ? item.alan_amount : item.mairon_amount) : 0), 0);
+    externalCategoryPayments
+      .filter((item) => item.person === person && item.paid)
+      .reduce((sum, item) => sum + item.amount, 0);
   const alanBudget = {
     income: incomeFor("ALAN"),
     credit: monthTotals.alan,
@@ -525,6 +640,12 @@ export default function App() {
     externalPaid: paidExternalFor("MAIRON")
   };
   const mobileBudget = mobilePerson === "alan" ? alanBudget : maironBudget;
+  const mobilePersonKey = mobilePerson === "alan" ? "ALAN" : "MAIRON";
+  const alanCategorySummaries = buildExternalCategorySummaries(externalMonthItems, "ALAN", externalCategoryPayments);
+  const maironCategorySummaries = buildExternalCategorySummaries(externalMonthItems, "MAIRON", externalCategoryPayments);
+  const bothCategorySummaries = buildExternalCategorySummaries(externalMonthItems, "BOTH", externalCategoryPayments);
+  const mobileCategorySummaries = mobilePerson === "mairon" ? maironCategorySummaries : alanCategorySummaries;
+  const selectedMobileCategory = mobileCategorySummaries.find((item) => item.key === selectedBudgetCategoryKey) ?? mobileCategorySummaries[0];
   const desktopPerson = desktopScope === "both" ? null : desktopScope;
   const desktopPersonName = desktopPerson === "alan" ? "Alan" : "Mairon";
   const desktopAccent = desktopPerson === "alan" ? "teal" : "amber";
@@ -537,11 +658,19 @@ export default function App() {
   const desktopStatementPerson = desktopPerson === "alan" ? alanStatement : maironStatement;
   const desktopPayment = desktopPerson === "alan" ? alanPayment : maironPayment;
   const desktopBudget = desktopPerson === "alan" ? alanBudget : maironBudget;
+  const desktopPersonKey = desktopPerson === "mairon" ? "MAIRON" : "ALAN";
+  const desktopCategorySummaries =
+    desktopScope === "both" ? bothCategorySummaries : desktopScope === "mairon" ? maironCategorySummaries : alanCategorySummaries;
+  const selectedDesktopCategory = desktopCategorySummaries.find((item) => item.key === selectedBudgetCategoryKey) ?? desktopCategorySummaries[0];
   const externalEditorExistingItems = externalEditor
     ? externalMonthItems
         .filter((item) => {
           if (item.id === externalEditor.id) return false;
-          if (item.category !== externalEditor.draft.category) return false;
+          if (externalEditor.draft.category === "custom") {
+            if (externalCategoryKey(item) !== externalCategoryKey(externalEditor.draft)) return false;
+          } else if (item.category !== externalEditor.draft.category) {
+            return false;
+          }
           if (externalEditor.draft.person === "AMBOS") return item.person === "AMBOS";
           return personAmount(item, externalEditor.draft.person) > 0;
         })
@@ -558,12 +687,13 @@ export default function App() {
   }
 
   function openExternalCreate(category: ExternalExpenseCategory = selectedExternalCategory) {
+    const scopedPerson = mobilePerson ?? (desktopScope === "both" ? null : desktopScope);
     setSelectedExternalCategory(category);
-    setExternalEditor({ mode: "create", draft: defaultExternalDraft(debtMonth, mobilePerson, category) });
+    setExternalEditor({ mode: "create", draft: defaultExternalDraft(debtMonth, scopedPerson, category) });
   }
 
   function openExternalEdit(expense: ExternalExpense) {
-    setSelectedExternalCategory(expense.category);
+    setSelectedExternalCategory(normalizeExternalCategory(expense.category));
     setExternalEditor({ mode: "edit", id: expense.id, draft: externalToDraft(expense) });
   }
 
@@ -601,6 +731,10 @@ export default function App() {
     event.preventDefault();
     if (!externalEditor) return;
     setError("");
+    if (externalEditor.draft.category === "custom" && !externalEditor.draft.category_name.trim()) {
+      setError("Debes ingresar el nombre de la categoria para guardar otros gastos.");
+      return;
+    }
     try {
       if (externalEditor.mode === "create") {
         await createExternalExpense(externalEditor.draft);
@@ -625,13 +759,28 @@ export default function App() {
     }
   }
 
-  async function toggleExternalPayment(expense: ExternalExpenseMonthItem, paid: boolean) {
+  async function toggleExternalCategoryPayment(person: "ALAN" | "MAIRON", category: BudgetCategorySummary, paid: boolean) {
     setError("");
     try {
-      await updateExternalExpensePayment({ expense_id: expense.id, month: debtMonth, paid });
+      await updateExternalCategoryPayment({
+        month: debtMonth,
+        person,
+        category_key: category.key,
+        category_label: category.label,
+        paid,
+        amount: category.amount,
+        note: paid ? `${category.label} confirmado para ${formatExpenseMonth(debtMonth)}.` : ""
+      });
       await loadBudget(debtMonth);
+      if (paid) {
+        const pendingMonth = await getNextPendingMonth(debtMonth, 60);
+        if (pendingMonth !== debtMonth) {
+          setFromMonth(pendingMonth);
+          setDebtMonth(pendingMonth);
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo actualizar el pago.");
+      setError(err instanceof Error ? err.message : "No se pudo actualizar el pago de la categoria.");
     }
   }
 
@@ -688,6 +837,20 @@ export default function App() {
 
   function updateExternalText(key: keyof ExternalExpensePayload, value: string) {
     if (!externalEditor) return;
+    if (key === "category") {
+      const category = normalizeExternalCategory(value as ExternalExpenseCategory);
+      updateExternalDraft({
+        ...externalEditor.draft,
+        category,
+        category_name: category === "custom" ? externalEditor.draft.category_name : "",
+        kind: category === "custom" ? "installments" : externalEditor.draft.kind
+      });
+      return;
+    }
+    if (key === "kind" && externalEditor.draft.category === "custom") {
+      updateExternalDraft({ ...externalEditor.draft, kind: "installments" });
+      return;
+    }
     updateExternalDraft({ ...externalEditor.draft, [key]: value });
   }
 
@@ -733,7 +896,7 @@ export default function App() {
         debtMonth={debtMonth}
         setDebtMonth={setDebtMonth}
         debtMonthOptions={debtMonthOptions}
-        projection={summary?.projection ?? []}
+        projection={combinedProjection}
         mobilePerson={mobilePerson}
         setMobilePerson={setMobilePerson}
         mobileView={mobileView}
@@ -751,13 +914,16 @@ export default function App() {
         budget={selectedBudget}
         mobileBudget={mobileBudget}
         externalMonthItems={externalMonthItems}
+        categorySummaries={mobileCategorySummaries}
+        selectedCategory={selectedMobileCategory}
         selectedExternalCategory={selectedExternalCategory}
         setSelectedExternalCategory={setSelectedExternalCategory}
+        setSelectedBudgetCategoryKey={setSelectedBudgetCategoryKey}
         selectedMonthDetail={selectedMonthDetail}
-        alanProjected={summary?.stats.alan_projected ?? 0}
-        maironProjected={summary?.stats.mairon_projected ?? 0}
-        alanMonthTotal={monthTotals.alan}
-        maironMonthTotal={monthTotals.mairon}
+        alanProjected={combinedStats.alan_projected}
+        maironProjected={combinedStats.mairon_projected}
+        alanMonthTotal={monthTotals.alan + alanBudget.external}
+        maironMonthTotal={monthTotals.mairon + maironBudget.external}
         alanPayment={alanPayment}
         maironPayment={maironPayment}
         refreshing={refreshing}
@@ -768,7 +934,7 @@ export default function App() {
         onOpenExternalCreate={openExternalCreate}
         onOpenExternalEdit={openExternalEdit}
         onDeleteExternal={(item) => void removeExternalExpense(item)}
-        onToggleExternalPaid={(item, paid) => void toggleExternalPayment(item, paid)}
+        onToggleExternalPaid={(category, paid) => void toggleExternalCategoryPayment(mobilePersonKey, category, paid)}
         onTogglePayment={toggleMonthPayment}
         onEdit={openEdit}
         onDelete={(item) => void removeDebt(item)}
@@ -788,11 +954,15 @@ export default function App() {
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Desde sueldo
+              Mes de gastos
               <input
                 type="month"
-                value={fromMonth}
-                onChange={(event) => setFromMonth(event.target.value)}
+                value={statementMonthFromPaymentMonth(debtMonth)}
+                onChange={(event) => {
+                  const paymentMonth = addMonthsToKey(event.target.value, 1);
+                  setFromMonth(paymentMonth);
+                  setDebtMonth(paymentMonth);
+                }}
                 className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
               />
             </label>
@@ -808,14 +978,16 @@ export default function App() {
               />
             </label>
             <RefreshButton refreshing={refreshing} done={refreshDone} onClick={() => void refreshAll()} />
-            <button
-              type="button"
-              onClick={() => openCreate()}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white shadow-soft transition hover:bg-slate-800"
-            >
-              <Plus size={18} />
-              Nueva
-            </button>
+            {desktopScope !== "both" && (
+              <button
+                type="button"
+                onClick={() => openCreate()}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white shadow-soft transition hover:bg-slate-800"
+              >
+                <Plus size={18} />
+                Nueva
+              </button>
+            )}
           </div>
         </header>
 
@@ -835,39 +1007,38 @@ export default function App() {
           message={selectedBudget?.message ?? ""}
           alanBudget={alanBudget}
           maironBudget={maironBudget}
-          externalItems={externalMonthItems}
+          categorySummaries={bothCategorySummaries}
           onSaveIncome={saveIncome}
-          onOpenExternalCreate={openExternalCreate}
         />
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             icon={<UserRound size={18} />}
             label="Alan proyectado"
-            value={formatCurrency(summary?.stats.alan_projected ?? 0)}
+            value={formatCurrency(combinedStats.alan_projected)}
             tone="teal"
             detail={`Termina ${formatMonth(summary?.stats.alan_end_month ?? null)}`}
           />
           <MetricCard
             icon={<UserRound size={18} />}
             label="Mairon proyectado"
-            value={formatCurrency(summary?.stats.mairon_projected ?? 0)}
+            value={formatCurrency(combinedStats.mairon_projected)}
             tone="amber"
             detail={`Termina ${formatMonth(summary?.stats.mairon_end_month ?? null)}`}
           />
           <MetricCard
             icon={<Users size={18} />}
             label="Total ambos"
-            value={formatCurrency(summary?.stats.total_projected ?? 0)}
+            value={formatCurrency(combinedStats.total_projected)}
             tone="rose"
             detail={`${summary?.stats.active_debts ?? 0} deudas por proyectar`}
           />
           <MetricCard
             icon={<CalendarDays size={18} />}
             label="Mes más alto"
-            value={formatCurrency(summary?.stats.peak_month?.total ?? 0)}
+            value={formatCurrency(combinedStats.peak_month?.total ?? 0)}
             tone="indigo"
-            detail={summary?.stats.peak_month?.month ? formatExpenseMonth(summary.stats.peak_month.month) : "Sin pagos"}
+            detail={combinedStats.peak_month?.month ? formatExpenseMonth(combinedStats.peak_month.month) : "Sin pagos"}
           />
         </section>
 
@@ -883,7 +1054,7 @@ export default function App() {
               </span>
             </div>
             <div className="flex flex-col gap-3">
-              {(summary?.projection ?? []).map((item) => (
+              {combinedProjection.map((item) => (
                 <ProjectionRow key={item.month} item={item} max={maxProjection} />
               ))}
             </div>
@@ -990,7 +1161,7 @@ export default function App() {
             person={desktopScope}
             personName={desktopPersonName}
             accent={desktopAccent}
-            projection={summary?.projection ?? []}
+            projection={combinedProjection}
             months={months}
             setMonths={setMonths}
             debtMonth={debtMonth}
@@ -1007,16 +1178,16 @@ export default function App() {
             budget={desktopBudget}
             budgetSchemaReady={selectedBudget?.schema_ready ?? false}
             budgetMessage={selectedBudget?.message ?? ""}
-            externalItems={externalMonthItems}
-            selectedExternalCategory={selectedExternalCategory}
-            setSelectedExternalCategory={setSelectedExternalCategory}
+            categorySummaries={desktopCategorySummaries}
+            selectedCategory={selectedDesktopCategory}
+            setSelectedCategory={(category) => setSelectedBudgetCategoryKey(category.key)}
             selectedMonthDetail={selectedMonthDetail}
             onTogglePayment={(paid) => void toggleMonthPayment(desktopScope === "alan" ? "ALAN" : "MAIRON", paid)}
             onSaveIncome={(person, amount) => void saveIncome(person, amount)}
             onOpenExternalCreate={openExternalCreate}
             onOpenExternalEdit={openExternalEdit}
             onDeleteExternal={(item) => void removeExternalExpense(item)}
-            onToggleExternalPaid={(item, paid) => void toggleExternalPayment(item, paid)}
+            onToggleExternalPaid={(category, paid) => void toggleExternalCategoryPayment(desktopPersonKey, category, paid)}
             onEdit={openEdit}
             onDelete={(item) => void removeDebt(item)}
           />
@@ -1233,6 +1404,17 @@ export default function App() {
                   ))}
                 </select>
               </Field>
+              {externalEditor.draft.category === "custom" ? (
+                <Field label="Categoria personalizada">
+                  <input
+                    value={externalEditor.draft.category_name}
+                    onChange={(event) => updateExternalText("category_name", event.target.value)}
+                    className="input"
+                    placeholder="CASA, Tarjeta Falabella..."
+                    required
+                  />
+                </Field>
+              ) : (
               <Field label="Icono / servicio">
                 <select
                   value={externalEditor.draft.service_key}
@@ -1247,6 +1429,7 @@ export default function App() {
                   ))}
                 </select>
               </Field>
+              )}
               <Field label="Responsable">
                 <select
                   value={externalEditor.draft.person}
@@ -1287,7 +1470,7 @@ export default function App() {
                   <div className="mt-1 text-xs text-slate-500">No hay registros previos en esta categorÃ­a para este responsable.</div>
                 )}
               </div>
-              <Field label="Monto">
+              <Field label={externalEditor.draft.kind === "installments" ? "Monto total" : "Monto mensual"}>
                 <input
                   type="text"
                   inputMode="numeric"
@@ -1322,6 +1505,7 @@ export default function App() {
                   value={externalEditor.draft.kind}
                   onChange={(event) => updateExternalText("kind", event.target.value as ExternalExpenseKind)}
                   className="input"
+                  disabled={externalEditor.draft.category === "custom"}
                 >
                   <option value="recurrent">Mensual</option>
                   <option value="installments">Cuotas</option>
@@ -1449,13 +1633,71 @@ function budgetTotals(budget: { income: number; credit: number; external: number
   };
 }
 
+function toneClasses(tone: BudgetCategoryTone) {
+  return {
+    teal: "bg-teal-50 text-teal-700",
+    amber: "bg-amber-50 text-amber-700",
+    rose: "bg-rose-50 text-rose-700",
+    indigo: "bg-indigo-50 text-indigo-700",
+    slate: "bg-slate-100 text-slate-700"
+  }[tone];
+}
+
+function buildExternalCategorySummaries(
+  items: ExternalExpenseMonthItem[],
+  person: "ALAN" | "MAIRON" | "BOTH",
+  payments: ExternalCategoryPaymentStatus[] = []
+): BudgetCategorySummary[] {
+  const summaryMap = new Map<string, BudgetCategorySummary>();
+  const ensureSummary = (key: string, category: ExternalExpenseCategory, label: string, description: string, index = 0) => {
+    const existing = summaryMap.get(key);
+    if (existing) return existing;
+    const payment = person === "BOTH" ? undefined : payments.find((item) => item.person === person && item.category_key === key);
+    const summary: BudgetCategorySummary = {
+      key,
+      category,
+      label,
+      description,
+      amount: 0,
+      count: 0,
+      icon: externalCategoryIcon(category),
+      tone: externalCategoryTone(category, index),
+      items: [],
+      payment,
+      paid: payment?.paid ?? false
+    };
+    summaryMap.set(key, summary);
+    return summary;
+  };
+
+  ensureSummary("subscriptions", "subscriptions", "Suscripciones", "Apps y servicios");
+  ensureSummary("home", "home", "Hogar", "Internet, luz, agua");
+
+  let customIndex = 0;
+  items.forEach((item) => {
+    const amount = personAmount(item, person);
+    if (amount <= 0) return;
+    const key = externalCategoryKey(item);
+    const label = externalCategoryLabel(item);
+    const summary =
+      item.category === "subscriptions" || item.category === "home"
+        ? ensureSummary(key, item.category, label, item.category === "subscriptions" ? "Apps y servicios" : "Internet, luz, agua")
+        : ensureSummary(key, "custom", label, "Gasto con termino definido", customIndex++);
+    summary.amount += amount;
+    summary.count += 1;
+    summary.items.push(item);
+  });
+
+  return Array.from(summaryMap.values()).filter((summary) => summary.category !== "custom" || summary.count > 0);
+}
+
 function BudgetDesktopOverview({
   month,
   schemaReady,
   message,
   alanBudget,
   maironBudget,
-  externalItems,
+  categorySummaries,
   onSaveIncome,
   onOpenExternalCreate
 }: {
@@ -1464,9 +1706,9 @@ function BudgetDesktopOverview({
   message: string;
   alanBudget: { income: number; credit: number; external: number; externalPaid: number };
   maironBudget: { income: number; credit: number; external: number; externalPaid: number };
-  externalItems: ExternalExpenseMonthItem[];
+  categorySummaries: BudgetCategorySummary[];
   onSaveIncome: (person: "ALAN" | "MAIRON", amount: number) => void;
-  onOpenExternalCreate: (category?: ExternalExpenseCategory) => void;
+  onOpenExternalCreate?: (category?: ExternalExpenseCategory) => void;
 }) {
   return (
     <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
@@ -1475,12 +1717,11 @@ function BudgetDesktopOverview({
         <PersonBudgetCard person="MAIRON" name="Mairon" month={month} budget={maironBudget} onSaveIncome={onSaveIncome} />
       </div>
       <BudgetModuleGrid
-        person="BOTH"
         creditTotal={alanBudget.credit + maironBudget.credit}
-        externalItems={externalItems}
+        categorySummaries={categorySummaries}
         schemaReady={schemaReady}
         message={message}
-        onSelectCategory={onOpenExternalCreate}
+        onCreate={onOpenExternalCreate}
       />
     </section>
   );
@@ -1493,7 +1734,7 @@ function PersonBudgetDashboard({
   budget,
   schemaReady,
   message,
-  externalItems,
+  categorySummaries,
   selectedCategory,
   onSelectCategory,
   onSaveIncome,
@@ -1508,26 +1749,25 @@ function PersonBudgetDashboard({
   budget: { income: number; credit: number; external: number; externalPaid: number };
   schemaReady: boolean;
   message: string;
-  externalItems: ExternalExpenseMonthItem[];
-  selectedCategory: ExternalExpenseCategory;
-  onSelectCategory: (category: ExternalExpenseCategory) => void;
+  categorySummaries: BudgetCategorySummary[];
+  selectedCategory: BudgetCategorySummary;
+  onSelectCategory: (category: BudgetCategorySummary) => void;
   onSaveIncome: (person: "ALAN" | "MAIRON", amount: number) => void;
   onOpenExternalCreate: (category?: ExternalExpenseCategory) => void;
   onOpenExternalEdit: (expense: ExternalExpense) => void;
   onDeleteExternal: (expense: ExternalExpense) => void;
-  onToggleExternalPaid: (expense: ExternalExpenseMonthItem, paid: boolean) => void;
+  onToggleExternalPaid: (category: BudgetCategorySummary, paid: boolean) => void;
 }) {
   return (
     <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
       <div className="grid gap-3">
         <PersonBudgetCard person={person} name={personName} month={month} budget={budget} onSaveIncome={onSaveIncome} />
         <BudgetModuleGrid
-          person={person}
           creditTotal={budget.credit}
-          externalItems={externalItems}
+          categorySummaries={categorySummaries}
           schemaReady={schemaReady}
           message={message}
-          selectedCategory={selectedCategory}
+          selectedCategoryKey={selectedCategory?.key}
           onSelectCategory={onSelectCategory}
           onCreate={onOpenExternalCreate}
         />
@@ -1535,8 +1775,7 @@ function PersonBudgetDashboard({
       <ExternalExpensePanel
         person={person}
         category={selectedCategory}
-        items={externalItems}
-        onCreate={() => onOpenExternalCreate(selectedCategory)}
+        onCreate={() => onOpenExternalCreate(selectedCategory?.category ?? "custom")}
         onEdit={onOpenExternalEdit}
         onDelete={onDeleteExternal}
         onTogglePaid={onToggleExternalPaid}
@@ -1552,9 +1791,10 @@ function MobileBudgetHome({
   budget,
   schemaReady,
   message,
-  externalItems,
+  categorySummaries,
   selectedCategory,
   onSelectCategory,
+  onSelectCard,
   onSaveIncome,
   onOpenExternalCreate
 }: {
@@ -1564,9 +1804,10 @@ function MobileBudgetHome({
   budget: { income: number; credit: number; external: number; externalPaid: number };
   schemaReady: boolean;
   message: string;
-  externalItems: ExternalExpenseMonthItem[];
-  selectedCategory: ExternalExpenseCategory;
-  onSelectCategory: (category: ExternalExpenseCategory) => void;
+  categorySummaries: BudgetCategorySummary[];
+  selectedCategory: BudgetCategorySummary;
+  onSelectCategory: (category: BudgetCategorySummary) => void;
+  onSelectCard: () => void;
   onSaveIncome: (person: "ALAN" | "MAIRON", amount: number) => void;
   onOpenExternalCreate: (category?: ExternalExpenseCategory) => void;
 }) {
@@ -1574,12 +1815,12 @@ function MobileBudgetHome({
     <div className="grid gap-4 animate-fade-up">
       <PersonBudgetCard person={person} name={personName} month={month} budget={budget} onSaveIncome={onSaveIncome} compact />
       <BudgetModuleGrid
-        person={person}
         creditTotal={budget.credit}
-        externalItems={externalItems}
+        categorySummaries={categorySummaries}
         schemaReady={schemaReady}
         message={message}
-        selectedCategory={selectedCategory}
+        selectedCategoryKey={selectedCategory?.key}
+        onSelectCard={onSelectCard}
         onSelectCategory={onSelectCategory}
         onCreate={onOpenExternalCreate}
       />
@@ -1645,7 +1886,7 @@ function PersonBudgetCard({
       </label>
 
       <div className={classNames("mt-4 grid gap-2", compact ? "grid-cols-1" : "sm:grid-cols-3")}>
-        <BudgetStat label="Descuentos" value={totals.discounts} tone="rose" />
+        <BudgetStat label="Total mes" value={totals.discounts} tone="rose" />
         <BudgetStat label="Disponible" value={totals.available} tone={totals.available >= 0 ? "teal" : "rose"} />
         <BudgetStat label="Externos" value={budget.external} tone="indigo" />
       </div>
@@ -1669,22 +1910,24 @@ function BudgetStat({ label, value, tone }: { label: string; value: number; tone
 }
 
 function BudgetModuleGrid({
-  person,
   creditTotal,
-  externalItems,
+  categorySummaries,
   schemaReady,
   message,
-  selectedCategory,
+  selectedCategoryKey,
+  creditPaid = false,
+  onSelectCard,
   onSelectCategory,
   onCreate
 }: {
-  person: "ALAN" | "MAIRON" | "BOTH";
   creditTotal: number;
-  externalItems: ExternalExpenseMonthItem[];
+  categorySummaries: BudgetCategorySummary[];
   schemaReady: boolean;
   message: string;
-  selectedCategory?: ExternalExpenseCategory;
-  onSelectCategory?: (category: ExternalExpenseCategory) => void;
+  selectedCategoryKey?: string;
+  creditPaid?: boolean;
+  onSelectCard?: () => void;
+  onSelectCategory?: (category: BudgetCategorySummary) => void;
   onCreate?: (category?: ExternalExpenseCategory) => void;
 }) {
   return (
@@ -1697,7 +1940,7 @@ function BudgetModuleGrid({
         {onCreate && (
           <button
             type="button"
-            onClick={() => onCreate(selectedCategory)}
+            onClick={() => onCreate("custom")}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-semibold text-white transition hover:bg-teal-800"
           >
             <Plus size={16} />
@@ -1719,23 +1962,22 @@ function BudgetModuleGrid({
           amount={creditTotal}
           icon={<CreditCard size={18} />}
           tone="teal"
+          paid={creditPaid}
+          onClick={onSelectCard}
         />
-        {externalCategories.map((category) => {
-          const total = externalItems.reduce((sum, item) => (item.category === category.key ? sum + personAmount(item, person) : sum), 0);
-          const count = externalItems.filter((item) => item.category === category.key && personAmount(item, person) > 0).length;
-          return (
-            <BudgetModuleCard
-              key={category.key}
-              label={category.label}
-              description={count ? `${count} registros` : category.description}
-              amount={total}
-              icon={category.icon}
-              tone={category.tone}
-              active={selectedCategory === category.key}
-              onClick={onSelectCategory ? () => onSelectCategory(category.key) : undefined}
-            />
-          );
-        })}
+        {categorySummaries.map((category) => (
+          <BudgetModuleCard
+            key={category.key}
+            label={category.label}
+            description={category.count ? `${category.count} registros` : category.description}
+            amount={category.amount}
+            icon={category.icon}
+            tone={category.tone}
+            paid={category.paid}
+            active={selectedCategoryKey === category.key}
+            onClick={onSelectCategory ? () => onSelectCategory(category) : undefined}
+          />
+        ))}
       </div>
     </article>
   );
@@ -1747,6 +1989,7 @@ function BudgetModuleCard({
   amount,
   icon,
   tone,
+  paid,
   active = false,
   onClick
 }: {
@@ -1754,17 +1997,12 @@ function BudgetModuleCard({
   description: string;
   amount: number;
   icon: ReactNode;
-  tone: "teal" | "amber" | "rose" | "indigo" | "slate";
+  tone: BudgetCategoryTone;
+  paid?: boolean;
   active?: boolean;
   onClick?: () => void;
 }) {
-  const toneClass = {
-    teal: "bg-teal-50 text-teal-700",
-    amber: "bg-amber-50 text-amber-700",
-    rose: "bg-rose-50 text-rose-700",
-    indigo: "bg-indigo-50 text-indigo-700",
-    slate: "bg-slate-100 text-slate-700"
-  }[tone];
+  const toneClass = toneClasses(tone);
   const Tag = onClick ? "button" : "div";
 
   return (
@@ -1782,7 +2020,10 @@ function BudgetModuleCard({
         <span className="text-right text-sm font-semibold text-slate-950">{formatCurrency(amount)}</span>
       </div>
       <div className="mt-3 text-sm font-semibold text-slate-950">{label}</div>
-      <div className="mt-1 text-xs text-slate-500">{description}</div>
+      <div className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-500">
+        <span>{description}</span>
+        {typeof paid === "boolean" && <PaymentBadge paid={paid} compact />}
+      </div>
     </Tag>
   );
 }
@@ -1790,7 +2031,6 @@ function BudgetModuleCard({
 function ExternalExpensePanel({
   person,
   category,
-  items,
   onBack,
   onCreate,
   onEdit,
@@ -1798,17 +2038,15 @@ function ExternalExpensePanel({
   onTogglePaid
 }: {
   person: "ALAN" | "MAIRON";
-  category: ExternalExpenseCategory;
-  items: ExternalExpenseMonthItem[];
+  category: BudgetCategorySummary;
   onBack?: () => void;
   onCreate: () => void;
   onEdit: (expense: ExternalExpense) => void;
   onDelete: (expense: ExternalExpense) => void;
-  onTogglePaid: (expense: ExternalExpenseMonthItem, paid: boolean) => void;
+  onTogglePaid: (category: BudgetCategorySummary, paid: boolean) => void;
 }) {
-  const info = categoryInfo(category);
-  const visibleItems = items.filter((item) => item.category === category && personAmount(item, person) > 0);
-  const total = visibleItems.reduce((sum, item) => sum + personAmount(item, person), 0);
+  const visibleItems = category.items;
+  const total = category.amount;
 
   return (
     <article className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft animate-fade-up">
@@ -1826,18 +2064,31 @@ function ExternalExpensePanel({
             </button>
           )}
           <div>
-            <h2 className="text-lg font-semibold text-slate-950">{info.label}</h2>
+            <h2 className="text-lg font-semibold text-slate-950">{category.label}</h2>
             <p className="text-sm text-slate-500">{visibleItems.length} registros · {formatCurrency(total)}</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => onCreate()}
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-semibold text-white transition hover:bg-teal-800"
-        >
-          <Plus size={16} />
-          Nuevo
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onTogglePaid(category, !category.paid)}
+            className={classNames(
+              "inline-flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-sm font-semibold transition",
+              category.paid ? "border-teal-200 bg-teal-50 text-teal-900" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            )}
+          >
+            <CheckCircle2 size={16} />
+            {category.paid ? "Pagado" : "Confirmar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onCreate()}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-semibold text-white transition hover:bg-teal-800"
+          >
+            <Plus size={16} />
+            Nuevo
+          </button>
+        </div>
       </div>
 
       <div className="divide-y divide-slate-100">
@@ -1851,7 +2102,6 @@ function ExternalExpensePanel({
               amount={personAmount(item, person)}
               onEdit={() => onEdit(item)}
               onDelete={() => onDelete(item)}
-              onTogglePaid={() => onTogglePaid(item, !item.paid)}
             />
           ))
         )}
@@ -1864,20 +2114,18 @@ function ExternalExpenseRow({
   item,
   amount,
   onEdit,
-  onDelete,
-  onTogglePaid
+  onDelete
 }: {
   item: ExternalExpenseMonthItem;
   amount: number;
   onEdit: () => void;
   onDelete: () => void;
-  onTogglePaid: () => void;
 }) {
   const service = item.category === "subscriptions" ? serviceInfo(item.service_key, item.title) : null;
   const category = categoryInfo(item.category);
 
   return (
-    <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_7rem_8.5rem] sm:items-center">
+    <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_7rem_5.5rem] sm:items-center">
       <div className="flex min-w-0 items-start gap-3">
         <span className={classNames("inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md", service?.tone ?? "bg-slate-100 text-slate-700")}>
           {service?.icon ?? category.icon}
@@ -1885,7 +2133,6 @@ function ExternalExpenseRow({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="min-w-0 truncate text-sm font-semibold text-slate-950">{item.title}</h3>
-            <PaymentBadge paid={item.paid} compact />
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
             <span>Vence día {item.due_day}</span>
@@ -1901,15 +2148,6 @@ function ExternalExpenseRow({
       </div>
 
       <div className="flex justify-end gap-1">
-        <button
-          type="button"
-          title={item.paid ? "Marcar pendiente" : "Marcar pagado"}
-          aria-label={`${item.paid ? "Marcar pendiente" : "Marcar pagado"} ${item.title}`}
-          onClick={onTogglePaid}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 text-teal-700 transition hover:bg-slate-50"
-        >
-          <CheckCircle2 size={16} />
-        </button>
         <button
           type="button"
           title="Editar"
@@ -1954,9 +2192,9 @@ function DesktopPersonDashboard({
   budget,
   budgetSchemaReady,
   budgetMessage,
-  externalItems,
-  selectedExternalCategory,
-  setSelectedExternalCategory,
+  categorySummaries,
+  selectedCategory,
+  setSelectedCategory,
   selectedMonthDetail,
   onTogglePayment,
   onSaveIncome,
@@ -1992,16 +2230,16 @@ function DesktopPersonDashboard({
   budget: { income: number; credit: number; external: number; externalPaid: number };
   budgetSchemaReady: boolean;
   budgetMessage: string;
-  externalItems: ExternalExpenseMonthItem[];
-  selectedExternalCategory: ExternalExpenseCategory;
-  setSelectedExternalCategory: (value: ExternalExpenseCategory) => void;
+  categorySummaries: BudgetCategorySummary[];
+  selectedCategory: BudgetCategorySummary;
+  setSelectedCategory: (value: BudgetCategorySummary) => void;
   selectedMonthDetail: MonthlyDetailResponse | null;
   onTogglePayment: (paid: boolean) => void;
   onSaveIncome: (person: "ALAN" | "MAIRON", amount: number) => void;
   onOpenExternalCreate: (category?: ExternalExpenseCategory) => void;
   onOpenExternalEdit: (expense: ExternalExpense) => void;
   onDeleteExternal: (expense: ExternalExpense) => void;
-  onToggleExternalPaid: (expense: ExternalExpenseMonthItem, paid: boolean) => void;
+  onToggleExternalPaid: (category: BudgetCategorySummary, paid: boolean) => void;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
 }) {
@@ -2019,9 +2257,9 @@ function DesktopPersonDashboard({
         budget={budget}
         schemaReady={budgetSchemaReady}
         message={budgetMessage}
-        externalItems={externalItems}
-        selectedCategory={selectedExternalCategory}
-        onSelectCategory={setSelectedExternalCategory}
+        categorySummaries={categorySummaries}
+        selectedCategory={selectedCategory}
+        onSelectCategory={setSelectedCategory}
         onSaveIncome={onSaveIncome}
         onOpenExternalCreate={onOpenExternalCreate}
         onOpenExternalEdit={onOpenExternalEdit}
@@ -2191,8 +2429,11 @@ function MobileShell({
   budget,
   mobileBudget,
   externalMonthItems,
+  categorySummaries,
+  selectedCategory,
   selectedExternalCategory,
   setSelectedExternalCategory,
+  setSelectedBudgetCategoryKey,
   selectedMonthDetail,
   alanProjected,
   maironProjected,
@@ -2245,8 +2486,11 @@ function MobileShell({
   budget: BudgetResponse | null;
   mobileBudget: { income: number; credit: number; external: number; externalPaid: number };
   externalMonthItems: ExternalExpenseMonthItem[];
+  categorySummaries: BudgetCategorySummary[];
+  selectedCategory: BudgetCategorySummary;
   selectedExternalCategory: ExternalExpenseCategory;
   setSelectedExternalCategory: (value: ExternalExpenseCategory) => void;
+  setSelectedBudgetCategoryKey: (value: string) => void;
   selectedMonthDetail: MonthlyDetailResponse | null;
   alanProjected: number;
   maironProjected: number;
@@ -2262,7 +2506,7 @@ function MobileShell({
   onOpenExternalCreate: (category?: ExternalExpenseCategory) => void;
   onOpenExternalEdit: (expense: ExternalExpense) => void;
   onDeleteExternal: (expense: ExternalExpense) => void;
-  onToggleExternalPaid: (expense: ExternalExpenseMonthItem, paid: boolean) => void;
+  onToggleExternalPaid: (category: BudgetCategorySummary, paid: boolean) => void;
   onTogglePayment: (person: "ALAN" | "MAIRON", paid: boolean) => Promise<void>;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
@@ -2328,18 +2572,22 @@ function MobileShell({
                   mobileAccent === "teal" ? "bg-teal-50 text-teal-900" : "bg-amber-50 text-amber-900"
                 )}
               >
-                {formatCurrency(mobileStatementPerson?.pay_now ?? mobileMonthlyTotal)}
+                {formatCurrency((mobileStatementPerson?.pay_now ?? mobileMonthlyTotal) + mobileBudget.external)}
               </span>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Desde sueldo
+              Mes de gastos
               <input
                 type="month"
-                value={fromMonth}
-                onChange={(event) => setFromMonth(event.target.value)}
+                value={statementMonthFromPaymentMonth(debtMonth)}
+                onChange={(event) => {
+                  const paymentMonth = addMonthsToKey(event.target.value, 1);
+                  setFromMonth(paymentMonth);
+                  setDebtMonth(paymentMonth);
+                }}
                 className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
               />
             </label>
@@ -2359,7 +2607,7 @@ function MobileShell({
             </label>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <MobileViewButton
               active={mobileView === "budget"}
               icon={<Banknote size={17} />}
@@ -2371,12 +2619,6 @@ function MobileShell({
               icon={<ChartNoAxesColumnIncreasing size={17} />}
               label="Proy."
               onClick={() => setMobileView("projection")}
-            />
-            <MobileViewButton
-              active={mobileView === "month"}
-              icon={<CalendarDays size={17} />}
-              label="Tarjeta"
-              onClick={() => setMobileView("month")}
             />
           </div>
 
@@ -2397,12 +2639,13 @@ function MobileShell({
               budget={mobileBudget}
               schemaReady={budget?.schema_ready ?? false}
               message={budget?.message ?? ""}
-              externalItems={externalMonthItems}
-              selectedCategory={selectedExternalCategory}
+              categorySummaries={categorySummaries}
+              selectedCategory={selectedCategory}
               onSelectCategory={(category) => {
-                setSelectedExternalCategory(category);
+                setSelectedBudgetCategoryKey(category.key);
                 setMobileView("external");
               }}
+              onSelectCard={() => setMobileView("month")}
               onSaveIncome={onSaveIncome}
               onOpenExternalCreate={onOpenExternalCreate}
             />
@@ -2411,10 +2654,9 @@ function MobileShell({
           {mobileView === "external" && (
             <ExternalExpensePanel
               person={mobilePerson === "alan" ? "ALAN" : "MAIRON"}
-              category={selectedExternalCategory}
-              items={externalMonthItems}
+              category={selectedCategory}
               onBack={() => setMobileView("budget")}
-              onCreate={() => onOpenExternalCreate(selectedExternalCategory)}
+              onCreate={() => onOpenExternalCreate(selectedCategory.category)}
               onEdit={onOpenExternalEdit}
               onDelete={onDeleteExternal}
               onTogglePaid={onToggleExternalPaid}
@@ -2444,6 +2686,7 @@ function MobileShell({
               statementPerson={mobileStatementPerson}
               payment={mobilePayment}
               selectedMonthDetail={selectedMonthDetail}
+              onBack={() => setMobileView("budget")}
               onTogglePayment={(paid) => onTogglePayment(mobilePerson === "alan" ? "ALAN" : "MAIRON", paid)}
               onEdit={onEdit}
               onDelete={onDelete}
@@ -2813,6 +3056,7 @@ function MobileMonthView({
   statementPerson,
   payment,
   selectedMonthDetail,
+  onBack,
   onTogglePayment,
   onEdit,
   onDelete
@@ -2832,15 +3076,29 @@ function MobileMonthView({
   };
   payment?: PaymentPersonStatus;
   selectedMonthDetail: MonthlyDetailResponse | null;
+  onBack?: () => void;
   onTogglePayment: (paid: boolean) => void;
   onEdit: (debt: Debt) => void;
   onDelete: (debt: Debt) => void;
 }) {
   return (
     <div className="flex flex-col gap-4 animate-fade-up">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-950">{formatExpenseMonth(month)}</h2>
-        <p className="text-sm text-slate-500">{formatSalaryMonth(month)}</p>
+      <div className="flex items-start gap-3">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            title="Volver"
+            aria-label="Volver"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-700 transition hover:bg-slate-50"
+          >
+            <ArrowLeft size={17} />
+          </button>
+        )}
+        <div>
+          <h2 className="text-lg font-semibold text-slate-950">Tarjeta Cencosud</h2>
+          <p className="text-sm text-slate-500">{formatExpenseMonth(month)} · {formatSalaryMonth(month)}</p>
+        </div>
       </div>
       <MonthTotal label={`${personName} gastos`} value={monthlyTotal} tone={accent} />
 

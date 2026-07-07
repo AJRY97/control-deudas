@@ -147,7 +147,7 @@ export interface MonthPaymentPayload {
 
 export type BudgetPerson = "ALAN" | "MAIRON";
 export type ExpensePerson = BudgetPerson | "AMBOS";
-export type ExternalExpenseCategory = "subscriptions" | "home" | "other_cards" | "external_debts" | "other";
+export type ExternalExpenseCategory = "subscriptions" | "home" | "custom" | "other_cards" | "external_debts" | "other";
 export type ExternalExpenseKind = "recurrent" | "installments" | "single";
 
 export interface MonthlyIncome {
@@ -161,6 +161,7 @@ export interface MonthlyIncome {
 export interface ExternalExpensePayload {
   title: string;
   category: ExternalExpenseCategory;
+  category_name: string;
   service_key: string;
   person: ExpensePerson;
   amount: number;
@@ -194,6 +195,7 @@ export interface BudgetResponse {
   incomes: MonthlyIncome[];
   expenses: ExternalExpense[];
   month_items: ExternalExpenseMonthItem[];
+  category_payments: ExternalCategoryPaymentStatus[];
 }
 
 export interface MonthlyIncomePayload {
@@ -207,4 +209,26 @@ export interface ExternalExpensePaymentPayload {
   expense_id: string;
   month: string;
   paid: boolean;
+}
+
+export interface ExternalCategoryPaymentStatus {
+  month: string;
+  person: BudgetPerson;
+  category_key: string;
+  category_label: string;
+  paid: boolean;
+  amount: number;
+  note: string;
+  paid_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ExternalCategoryPaymentPayload {
+  month: string;
+  person: BudgetPerson;
+  category_key: string;
+  category_label: string;
+  paid: boolean;
+  amount?: number;
+  note?: string;
 }

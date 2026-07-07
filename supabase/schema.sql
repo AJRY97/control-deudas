@@ -43,8 +43,9 @@ create table if not exists public.monthly_incomes (
 create table if not exists public.external_expenses (
   id uuid primary key default gen_random_uuid(),
   title text not null,
-  category text not null default 'other'
-    check (category in ('subscriptions', 'home', 'other_cards', 'external_debts', 'other')),
+  category text not null default 'custom'
+    check (category in ('subscriptions', 'home', 'custom')),
+  category_name text not null default '',
   service_key text not null default '',
   person text not null default 'AMBOS'
     check (person in ('ALAN', 'MAIRON', 'AMBOS')),
@@ -67,6 +68,42 @@ create table if not exists public.external_expense_payments (
   updated_at timestamptz not null default now(),
   primary key (expense_id, month)
 );
+
+create table if not exists public.external_category_payments (
+  month text not null check (month ~ '^[0-9]{4}-[0-9]{2}$'),
+  person text not null check (person in ('ALAN', 'MAIRON')),
+  category_key text not null,
+  category_label text not null default '',
+  paid boolean not null default false,
+  amount integer not null default 0 check (amount >= 0),
+  note text not null default '',
+  paid_at timestamptz,
+  updated_at timestamptz not null default now(),
+  primary key (month, person, category_key)
+);
+
+alter table public.external_expenses
+add column if not exists category_name text not null default '';
+
+update public.external_expenses
+set category_name = case
+    when category = 'other_cards' then 'Otras tarjetas'
+    when category = 'external_debts' then 'Deudas externas'
+    when category = 'other' and category_name = '' then 'Otros gastos'
+    else category_name
+  end,
+  category = case
+    when category in ('other_cards', 'external_debts', 'other') then 'custom'
+    else category
+  end
+where category in ('other_cards', 'external_debts', 'other');
+
+alter table public.external_expenses
+drop constraint if exists external_expenses_category_check;
+
+alter table public.external_expenses
+add constraint external_expenses_category_check
+check (category in ('subscriptions', 'home', 'custom'));
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -103,6 +140,11 @@ create trigger external_expense_payments_set_updated_at
 before update on public.external_expense_payments
 for each row execute function public.set_updated_at();
 
+drop trigger if exists external_category_payments_set_updated_at on public.external_category_payments;
+create trigger external_category_payments_set_updated_at
+before update on public.external_category_payments
+for each row execute function public.set_updated_at();
+
 create index if not exists debts_start_month_idx on public.debts (start_month);
 create index if not exists debts_is_paid_idx on public.debts (is_paid);
 create index if not exists monthly_payments_month_idx on public.monthly_payments (month);
@@ -110,12 +152,14 @@ create index if not exists monthly_incomes_month_idx on public.monthly_incomes (
 create index if not exists external_expenses_start_month_idx on public.external_expenses (start_month);
 create index if not exists external_expenses_category_idx on public.external_expenses (category);
 create index if not exists external_expense_payments_month_idx on public.external_expense_payments (month);
+create index if not exists external_category_payments_month_idx on public.external_category_payments (month);
 
 alter table public.debts enable row level security;
 alter table public.monthly_payments enable row level security;
 alter table public.monthly_incomes enable row level security;
 alter table public.external_expenses enable row level security;
 alter table public.external_expense_payments enable row level security;
+alter table public.external_category_payments enable row level security;
 
 drop policy if exists "debts anon read" on public.debts;
 create policy "debts anon read"
@@ -220,6 +264,25 @@ with check (true);
 drop policy if exists "external expense payments anon update" on public.external_expense_payments;
 create policy "external expense payments anon update"
 on public.external_expense_payments for update
+to anon
+using (true)
+with check (true);
+
+drop policy if exists "external category payments anon read" on public.external_category_payments;
+create policy "external category payments anon read"
+on public.external_category_payments for select
+to anon
+using (true);
+
+drop policy if exists "external category payments anon insert" on public.external_category_payments;
+create policy "external category payments anon insert"
+on public.external_category_payments for insert
+to anon
+with check (true);
+
+drop policy if exists "external category payments anon update" on public.external_category_payments;
+create policy "external category payments anon update"
+on public.external_category_payments for update
 to anon
 using (true)
 with check (true);
