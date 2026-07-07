@@ -1195,10 +1195,10 @@ export default function App() {
       </div>
 
       {editor && (
-        <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+        <div className="fixed inset-0 z-50 flex items-end overflow-x-hidden bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
           <form
             onSubmit={(event) => void saveDebt(event)}
-            className="max-h-[94vh] w-full max-w-full overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
+            className="mobile-sheet max-h-[calc(100dvh-0.75rem)] w-full max-w-[100dvw] overflow-x-hidden overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
           >
             <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
               <div>
@@ -1218,7 +1218,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid min-w-0 gap-3 sm:grid-cols-2">
               <Field label="Concepto" className="sm:col-span-2">
                 <input
                   value={editor.draft.title}
@@ -1359,10 +1359,10 @@ export default function App() {
       )}
 
       {externalEditor && (
-        <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+        <div className="fixed inset-0 z-50 flex items-end overflow-x-hidden bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
           <form
             onSubmit={(event) => void saveExternalExpense(event)}
-            className="max-h-[94vh] w-full max-w-full overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
+            className="mobile-sheet max-h-[calc(100dvh-0.75rem)] w-full max-w-[100dvw] overflow-x-hidden overflow-y-auto rounded-t-lg bg-white p-4 shadow-soft animate-fade-up sm:mx-auto sm:max-w-2xl sm:rounded-lg sm:p-5"
           >
             <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
               <div>
@@ -1382,7 +1382,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid min-w-0 gap-3 sm:grid-cols-2">
               <Field label="Nombre" className="sm:col-span-2">
                 <input
                   value={externalEditor.draft.title}
@@ -1467,7 +1467,7 @@ export default function App() {
                     })}
                   </div>
                 ) : (
-                  <div className="mt-1 text-xs text-slate-500">No hay registros previos en esta categorÃ­a para este responsable.</div>
+                  <div className="mt-1 text-xs text-slate-500">No hay registros previos en esta categoria para este responsable.</div>
                 )}
               </div>
               <Field label={externalEditor.draft.kind === "installments" ? "Monto total" : "Monto mensual"}>
@@ -1535,17 +1535,19 @@ export default function App() {
               </Field>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
+            <div className="mt-4 flex min-w-0 flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
                 <span
                   className={classNames(
-                    "inline-flex h-8 w-8 items-center justify-center rounded-md",
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
                     serviceInfo(externalEditor.draft.service_key, externalEditor.draft.title).tone
                   )}
                 >
                   {serviceInfo(externalEditor.draft.service_key, externalEditor.draft.title).icon}
                 </span>
-                {externalEditor.draft.person === "AMBOS" ? "Se divide entre ambos" : externalEditor.draft.person === "ALAN" ? "Lo paga Alan" : "Lo paga Mairon"}
+                <span className="min-w-0 truncate">
+                  {externalEditor.draft.person === "AMBOS" ? "Se divide entre ambos" : externalEditor.draft.person === "ALAN" ? "Lo paga Alan" : "Lo paga Mairon"}
+                </span>
               </div>
               <button
                 type="submit"
@@ -1885,20 +1887,18 @@ function PersonBudgetCard({
         </div>
       </label>
 
-      <div className={classNames("mt-4 grid gap-2", compact ? "grid-cols-1" : "sm:grid-cols-3")}>
+      <div className={classNames("mt-4 grid gap-2", compact ? "grid-cols-1" : "sm:grid-cols-2")}>
         <BudgetStat label="Total mes" value={totals.discounts} tone="rose" />
         <BudgetStat label="Disponible" value={totals.available} tone={totals.available >= 0 ? "teal" : "rose"} />
-        <BudgetStat label="Externos" value={budget.external} tone="indigo" />
       </div>
     </article>
   );
 }
 
-function BudgetStat({ label, value, tone }: { label: string; value: number; tone: "teal" | "rose" | "indigo" }) {
+function BudgetStat({ label, value, tone }: { label: string; value: number; tone: "teal" | "rose" }) {
   const toneClass = {
     teal: "bg-teal-50 text-teal-900",
-    rose: "bg-rose-50 text-rose-700",
-    indigo: "bg-indigo-50 text-indigo-700"
+    rose: "bg-rose-50 text-rose-700"
   }[tone];
 
   return (
@@ -2049,9 +2049,9 @@ function ExternalExpensePanel({
   const total = category.amount;
 
   return (
-    <article className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft animate-fade-up">
-      <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <div className="flex items-start gap-3">
+    <article className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft animate-fade-up">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
           {onBack && (
             <button
               type="button"
@@ -2063,17 +2063,17 @@ function ExternalExpensePanel({
               <ArrowLeft size={17} />
             </button>
           )}
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950">{category.label}</h2>
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-semibold text-slate-950">{category.label}</h2>
             <p className="text-sm text-slate-500">{visibleItems.length} registros · {formatCurrency(total)}</p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:shrink-0 sm:items-center">
           <button
             type="button"
             onClick={() => onTogglePaid(category, !category.paid)}
             className={classNames(
-              "inline-flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-sm font-semibold transition",
+              "inline-flex h-9 min-w-0 items-center justify-center gap-2 rounded-md border px-2 text-sm font-semibold transition sm:px-3",
               category.paid ? "border-teal-200 bg-teal-50 text-teal-900" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
             )}
           >
@@ -2083,7 +2083,7 @@ function ExternalExpensePanel({
           <button
             type="button"
             onClick={() => onCreate()}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-semibold text-white transition hover:bg-teal-800"
+            className="inline-flex h-9 min-w-0 items-center justify-center gap-2 rounded-md bg-teal-700 px-2 text-sm font-semibold text-white transition hover:bg-teal-800 sm:px-3"
           >
             <Plus size={16} />
             Nuevo
@@ -2514,9 +2514,9 @@ function MobileShell({
   const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-lg flex-col gap-4 overflow-x-hidden px-4 pb-28 pt-4 lg:hidden">
-      <header className="flex items-center justify-between gap-3">
-        <div>
+    <section className="mx-auto flex min-h-screen w-full max-w-lg min-w-0 flex-col gap-4 overflow-x-hidden px-4 pb-[calc(env(safe-area-inset-bottom)+7rem)] pt-[calc(env(safe-area-inset-top)+1rem)] lg:hidden">
+      <header className="flex min-w-0 items-center justify-between gap-3">
+        <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-teal-700">
             <WalletCards size={16} />
             Control de deudas
@@ -2551,7 +2551,7 @@ function MobileShell({
         />
       ) : (
         <>
-          <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-soft animate-fade-up">
+          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 shadow-soft animate-fade-up">
             <div className="flex items-center justify-between gap-3">
               <button
                 type="button"
@@ -2568,7 +2568,7 @@ function MobileShell({
               </div>
               <span
                 className={classNames(
-                  "inline-flex rounded-md px-3 py-2 text-sm font-semibold",
+                  "inline-flex shrink-0 rounded-md px-3 py-2 text-sm font-semibold",
                   mobileAccent === "teal" ? "bg-teal-50 text-teal-900" : "bg-amber-50 text-amber-900"
                 )}
               >
@@ -3860,7 +3860,7 @@ function Field({
   className?: string;
 }) {
   return (
-    <label className={classNames("flex flex-col gap-1 text-sm font-semibold text-slate-700", className)}>
+    <label className={classNames("flex min-w-0 flex-col gap-1 text-sm font-semibold text-slate-700", className)}>
       {label}
       {children}
     </label>

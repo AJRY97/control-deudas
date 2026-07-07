@@ -37,6 +37,15 @@
     overflow-x: hidden;
   }
 
+  form,
+  label,
+  input,
+  select,
+  textarea,
+  button {
+    max-width: 100%;
+  }
+
   button,
   input,
   textarea {
@@ -49,6 +58,16 @@
   select,
   textarea {
     font-size: 16px !important;
+  }
+
+  .mobile-sheet {
+    inline-size: 100dvw;
+    max-inline-size: 100dvw;
+    overscroll-behavior: contain;
+  }
+
+  .mobile-sheet * {
+    max-inline-size: 100%;
   }
 }
 
